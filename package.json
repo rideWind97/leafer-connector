@@ -1,0 +1,59 @@
+{
+  "name": "leafer-connector",
+  "version": "0.1.0",
+  "description": "A LeaferJS connector (edge) component with anchors/ports, arrows, multiple line types and reconnect interaction.",
+  "license": "MIT",
+  "homepage": "https://www.npmjs.com/package/leafer-connector",
+  "type": "module",
+  "sideEffects": false,
+  "keywords": [
+    "leafer",
+    "leaferjs",
+    "connector",
+    "edge",
+    "arrow",
+    "diagram",
+    "flow"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/cjs/index.cjs",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.cjs"
+    }
+  },
+  "peerDependencies": {
+    "leafer-editor": "^1.12.1"
+  },
+  "peerDependenciesMeta": {
+    "leafer-editor": {
+      "optional": false
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build:esm": "pnpm -C ../.. -s exec tsc -p packages/leafer-connector/tsconfig.build.esm.json",
+    "build:cjs": "pnpm -C ../.. -s exec tsc -p packages/leafer-connector/tsconfig.build.cjs.json && node scripts/rename-cjs.mjs",
+    "build": "pnpm -s run clean && pnpm -s run build:esm && pnpm -s run build:cjs",
+    "bundle:rollup": "pnpm -s run build && pnpm -s exec rollup -c rollup.config.mjs",
+    "prepublishOnly": "pnpm -s run build"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "rollup": "^4.40.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
+
+
