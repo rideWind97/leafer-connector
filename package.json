@@ -46,17 +46,18 @@
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build:esm": "pnpm -C ../.. -s exec tsc -p packages/leafer-connector/tsconfig.build.esm.json",
-    "build:cjs": "pnpm -C ../.. -s exec tsc -p packages/leafer-connector/tsconfig.build.cjs.json && node scripts/rename-cjs.mjs",
-    "build": "pnpm -s run clean && pnpm -s run build:esm && pnpm -s run build:cjs",
-    "bundle:rollup": "pnpm -s run build && pnpm -s exec rollup -c rollup.config.mjs",
-    "prepublishOnly": "pnpm -s run build"
+    "build:esm": "pnpm exec tsc -p tsconfig.build.esm.json",
+    "build:cjs": "pnpm exec tsc -p tsconfig.build.cjs.json && node scripts/rename-cjs.mjs",
+    "build": "pnpm run clean && pnpm run build:esm && pnpm run build:cjs",
+    "bundle:rollup": "pnpm run build && pnpm exec rollup -c rollup.config.mjs",
+    "prepublishOnly": "pnpm run build"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-terser": "^0.4.4",
-    "rollup": "^4.40.0"
+    "rollup": "^4.40.0",
+    "typescript": "^5.8.3"
   },
   "publishConfig": {
     "access": "public"
