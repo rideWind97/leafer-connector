@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "description": "A LeaferJS connector (edge) component with arrows, multiple route types, labels, and collaboration helpers.",
   "license": "MIT",
-  "homepage": "https://www.npmjs.com/package/leafer-connector",
+  "homepage": "https://github.com/rideWind97/leafer-connector",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rideWind97/leafer-connector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rideWind97/leafer-connector/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "keywords": [
