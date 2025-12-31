@@ -2,18 +2,16 @@
 
 基于 LeaferJS（通过 `leafer-editor`）实现的连接线（Connector / Edge）组件，面向“白板 / 流程图 / 节点图”场景。
 
-你可以把它理解成：**给两个 `IUI` 节点自动画出一条“像流程图工具一样”的连线**，并支持重连、label、协同等能力。
+你可以把它理解成：**给两个 `IUI` 节点自动画出一条“像流程图工具一样”的连线**，并支持 label、协同等能力。
 
 ## 能力概览
 
 - **连接 2 个节点**：`from/to: IUI`
-- **端点模型**：`padding / margin / side / percent / portId / linkPoint`
+- **端点模型**：`padding / margin / side(auto) / percent / linkPoint`
 - **路由类型**：`orthogonal / bezier / straight / custom`
 - **样式**：`stroke / strokeWidth / dashPattern / startArrow / endArrow`
 - **缩放策略**：`scaleMode: world | pixel`（线宽/箭头是否随 zoom 缩放）
-- **交互**：
-  - 端点手柄（handles）拖拽重连（可选，默认隐藏）
-  - 双击连线创建/编辑 label（label 永远在路径中点）
+- **交互**：双击连线创建/编辑 label（label 永远在路径中点）
 - **协同/程序更新**：`updateMode="render"` + `renderThrottleMs`
 - **状态同步**：`getState/setState` + `onChange/onLabelChange` 输出 diff
 
@@ -42,212 +40,6 @@ const edge = new Connector(app, { from: a, to: b });
 app.tree.add([a, b, edge]);
 ```
 
-## 典型用法（推荐配置）
-
-```ts
-import { App, Rect } from "leafer-editor";
-import { Connector, setNodePorts } from "leafer-connector";
-
-const app = new App({ view: container, editor: {} });
-
-const a = new Rect({ x: 100, y: 100, width: 200, height: 160, fill: "#32cd79", draggable: true });
-const b = new Rect({ x: 520, y: 280, width: 220, height: 160, fill: "#3b82f6", draggable: true });
-
-// 1) ports：给节点注册可连接的“插口”（可选）
-setNodePorts(a, [
-  { id: "top", x: 0.5, y: 0, unit: "percent" },
-  { id: "right", x: 1, y: 0.5, unit: "percent" },
-  { id: "bottom", x: 0.5, y: 1, unit: "percent" },
-  { id: "left", x: 0, y: 0.5, unit: "percent" },
-]);
-
-// 2) 创建连线
-const edge = new Connector(app, {
-  from: a,
-  to: b,
-
-  // 路由类型：默认 orthogonal；如果你希望更“平滑”，用 bezier
-  routeType: "bezier",
-
-  // 端点出线段、边距、圆角
-  padding: 24,
-  margin: 6,
-  cornerRadius: 16,
-
-  // bezier 参数（可选，默认 0.6）
-  bezierCurvature: 0.6,
-
-  // bezier 的“降级阈值”（可选，默认 0；设为 140 则近距离会转正交圆角更稳定）
-  routeOptions: { bezierFallbackDistance: 0 },
-
-  // 样式
-  stroke: "#ffffff",
-  strokeWidth: 2,
-  dashPattern: undefined,
-  endArrow: { type: "triangle", scale: 1 },
-
-  // 端点策略（单端覆盖）
-  opt1: { side: "auto", percent: 0.5 },
-  opt2: { side: "auto", percent: 0.5 },
-
-  // 交互：端点重连手柄（默认隐藏）
-  handles: { visible: false },
-
-  // label：双击连线即可编辑，默认会给背景遮挡线条（不传 boxStyle/padding 时）
-  label: {
-    text: "关系",
-    editable: true,
-    style: {
-      fill: "#ffffff",
-      fontSize: 12,
-      // boxStyle: { fill: "#00000088", cornerRadius: 6 }, // 你也可以自定义背景
-    },
-  },
-});
-
-app.tree.add([a, b, edge]);
-```
-
-## 默认值（重要）
-
-这些默认值来自 `Connector` 构造器与 `src/types.ts`：
-
-- `routeType`: `"orthogonal"`
-- `padding`: `20`
-- `margin`: `0`
-- `cornerRadius`: `16`
-- `bezierCurvature`: `0.6`
-- `stroke`: `"#ffffff"`
-- `strokeWidth`: `2`
-- `scaleMode`: `"world"`
-- `arrowBaseScale`: `1`
-- `labelOnDoubleClick`: `true`
-- `updateMode`: `"event"`
-- `renderThrottleMs`: `16`
-- `handles.visible`: `false`（默认不显示/不可拖拽）
-- `routeOptions`（会做深合并）：
-  - `avoidPadding`: 默认为 `margin`
-  - `intersectionPenalty`: `1e6`
-  - `longStraightRatio`: `0.65`
-  - `longStraightWeight`: `2000`
-  - `enableSRoutes`: `true`
-  - `bezierFallbackDistance`: `0`
-
-## 参数说明（ConnectorOptions）
-
-> 完整类型定义见 `packages/leafer-connector/src/types.ts`。
-
-### 必填
-
-- `from: IUI`：起点节点
-- `to: IUI`：终点节点
-
-### 端点与路由
-
-- `routeType?: "orthogonal" | "bezier" | "straight" | "custom"`  
-  - `"orthogonal"`：正交折线 + 圆角（smart-route）
-  - `"bezier"`：smooth-step 风格曲线（在节点很近/重叠时可选降级为正交）
-  - `"straight"`：直线（仍会包含 linkPoint/paddingPoint 的出线段）
-  - `"custom"`：默认给一个可用结果，但你应通过 `onDraw` 覆盖
-- `padding?: number`：出线段长度（从 linkPoint 沿法线外扩）
-- `margin?: number`：连接点与节点边界的间距（让线不要贴边）
-- `cornerRadius?: number`：正交圆角半径
-- `opt1?: TargetOption` / `opt2?: TargetOption`：单端覆盖（见下方 TargetOption）
-- `fromPorts?: ConnectorPort[]` / `toPorts?: ConnectorPort[]`：可选，给 from/to 注册 ports（也可以用 `setNodePorts`）
-
-### Bezier
-
-- `bezierCurvature?: number`：曲率/张力（越大曲线“张开”越明显）
-- `routeOptions?.bezierFallbackDistance?: number`：当 `routeType="bezier"` 时，若两端 padding 点距离小于该值（或节点重叠），可降级为正交圆角  
-  - 默认 `0`：尽量保持贝塞尔
-  - 推荐 `140`：近距离更稳定、避免回勾
-
-### 样式
-
-- `stroke?: string`
-- `strokeWidth?: number`
-- `dashPattern?: number[]`：虚线，例如 `[6, 4]`
-- `startArrow?: IArrowStyle`
-- `endArrow?: IArrowStyle`（默认 `"triangle"`）
-
-### 缩放策略
-
-- `scaleMode?: "world" | "pixel"`  
-  - `"world"`：跟随画布缩放（默认）
-  - `"pixel"`：保持像素大小（线宽/箭头不随 zoom 变化）
-- `arrowBaseScale?: number`：箭头基准缩放（配合 pixel 模式更常用）
-
-### handles（端点手柄 / 重连）
-
-- `handles?: { visible?: boolean; size?: number; fill?: string; stroke?: string; strokeWidth?: number; opacity?: number }`  
-  - `visible: true` 才会显示并允许拖拽重连
-
-### label（连线文字）
-
-- `label?: { text?: string; editable?: boolean; style?: Partial<ITextInputData> }`
-- `labelOnDoubleClick?: boolean`：是否允许双击连线打开/创建 label（默认 true）
-
-> 提示：如果你不传 `style.boxStyle/padding`，组件会给 label 自动加半透明背景遮挡线条，保证可读。
-
-### 更新模式（协同/性能）
-
-- `updateMode?: "event" | "render" | "manual"`
-  - `event`：仅交互事件触发 `update()`（性能最好，默认）
-  - `render`：每帧 `RenderEvent.END` 触发（适合协同/程序改变坐标）
-  - `manual`：完全手动
-- `renderThrottleMs?: number`：`render` 模式节流，推荐 `16~33`
-
-### 协同同步
-
-- `getNodeId?: (node: IUI) => string`：用于 `getState`
-- `onChange?: ({ reason, prev, next, diff, changedKeys }) => void`：结构变化统一回调（用于写入 Yjs diff）
-- `onLabelChange?: ({ oldText, newText }) => void`：label 文本变化
-
-### 重连过滤
-
-- `pickFilter?: (pickTarget: IUI) => IUI | null`：将 pick 命中对象归一化（例如命中子节点返回父节点）
-- `canConnect?: (candidate: IUI, which: "from" | "to") => boolean`：是否允许连接到候选节点
-- `onReconnect?: ({ which, oldNode, newNode }) => void`：重连成功回调
-
-## TargetOption（单端端点策略）
-
-`opt1/opt2` 的字段与优先级（从高到低）：
-
-1. `linkPoint?: IPointData`（world 坐标）：固定连接点（最高优先级）
-2. `portId?: string`：吸附到某个 port
-3. `side?: "top" | "right" | "bottom" | "left" | "auto"` + `percent?: number`：在某条边上按比例取点
-
-其它：
-
-- `padding?: number` / `margin?: number`：单端覆盖
-- `percent` 默认 `0.5`（边中点）
-
-## Ports（插口）
-
-你可以通过 `setNodePorts(node, ports)` 给节点注册 ports，也可以直接在创建 Connector 时传 `fromPorts/toPorts`。
-
-```ts
-import { setNodePorts } from "leafer-connector";
-
-setNodePorts(node, [
-  { id: "top", x: 0.5, y: 0, unit: "percent" },
-  { id: "right", x: 1, y: 0.5, unit: "percent" },
-  { id: "bottom", x: 0.5, y: 1, unit: "percent" },
-  { id: "left", x: 0, y: 0.5, unit: "percent" },
-]);
-```
-
-使用 port：
-
-```ts
-const edge = new Connector(app, {
-  from: a,
-  to: b,
-  opt1: { portId: "right" },
-  opt2: { portId: "left" },
-});
-```
-
 ## 路由示例
 
 ### 正交（orthogonal）
@@ -260,6 +52,7 @@ const edge = new Connector(app, {
   cornerRadius: 16,
 });
 ```
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/default.gif)
 
 ### 贝塞尔（bezier）
 
@@ -275,6 +68,8 @@ const edge = new Connector(app, {
   },
 });
 ```
+![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/bezier.gif)
+
 
 ### 直线（straight）
 
@@ -285,6 +80,7 @@ const edge = new Connector(app, {
   routeType: "straight",
 });
 ```
+![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/straight.gif)
 
 ### 自定义（custom + onDraw）
 
@@ -310,6 +106,7 @@ const edge = new Connector(app, {
   },
 });
 ```
+![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/custom.gif)
 
 ## label（连线文字）示例
 
@@ -322,6 +119,7 @@ const edge = new Connector(app, {
   label: { text: "Hello", editable: true },
 });
 ```
+![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/name.gif)
 
 ### 自定义 label 样式
 
@@ -343,20 +141,129 @@ const edge = new Connector(app, {
 });
 ```
 
-## handles（端点手柄）重连示例
+## 参数总览（表格）
 
-```ts
-const edge = new Connector(app, {
-  from: a,
-  to: b,
-  handles: { visible: true, size: 10, fill: "#fff", stroke: "#000", strokeWidth: 1 },
-  pickFilter: (t) => t, // 命中子节点时可在这里返回父节点
-  canConnect: (candidate) => candidate !== edge,
-  onReconnect: ({ which, oldNode, newNode }) => {
-    console.log(which, oldNode, newNode);
-  },
-});
-```
+> 这一节把所有入参集中在一个地方，方便快速查阅（字段名使用“点号路径”表示嵌套结构）。
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `from` | `IUI` | 是 | - | 起点节点 |
+| `to` | `IUI` | 是 | - | 终点节点 |
+| `routeType` | `"orthogonal" \| "bezier" \| "straight" \| "custom"` | 否 | `"orthogonal"` | 路由类型 |
+| `padding` | `number` | 否 | `20` | 出线段长度（从 linkPoint 沿法线外扩） |
+| `margin` | `number` | 否 | `0` | 连接点与节点边界间距（让线不贴边） |
+| `cornerRadius` | `number` | 否 | `16` | 正交/智能路由的圆角半径 |
+| `opt1` | `TargetOption` | 否 | - | 起点单端端点策略（覆盖全局） |
+| `opt2` | `TargetOption` | 否 | - | 终点单端端点策略（覆盖全局） |
+| `bezierCurvature` | `number` | 否 | `0.6` | bezier 曲率/张力（越大越“张开”） |
+| `routeOptions` | `{ ... }` | 否 | - | smart-route 参数（会做深合并，未传字段会用默认值） |
+| `routeOptions.avoidPadding` | `number` | 否 | `margin` | 避障 padding：将需要避开的 bounds 外扩多少（local） |
+| `routeOptions.intersectionPenalty` | `number` | 否 | `1e6` | 线段与避障矩形相交的惩罚分（越大越“绕开”） |
+| `routeOptions.longStraightRatio` | `number` | 否 | `0.65` | 长直线惩罚阈值（maxSegment/total > ratio 开始惩罚） |
+| `routeOptions.longStraightWeight` | `number` | 否 | `2000` | 长直线惩罚权重 |
+| `routeOptions.enableSRoutes` | `boolean` | 否 | `true` | 是否生成 S-route（两次转折）候选 |
+| `routeOptions.bezierFallbackDistance` | `number` | 否 | `0` | bezier 近距离降级阈值（小于该值或节点重叠可降级为正交圆角） |
+| `onDraw` | `({ s, e, defaultResult }) => Partial<{ points; path }> \| void` | 否 | - | 自定义绘制（入参/出参 points/path 都是 world 坐标） |
+| `updateMode` | `"event" \| "render" \| "manual"` | 否 | `"event"` | 自动更新模式（协同场景建议用 render） |
+| `renderThrottleMs` | `number` | 否 | `16` | render 模式节流（ms） |
+| `getNodeId` | `(node: IUI) => string` | 否 | - | 协同序列化：node -> id（用于 getState/onChange） |
+| `onChange` | `({ reason, prev, next, diff, changedKeys }) => void` | 否 | - | 统一变更回调（reason: `"label" \| "setState"`） |
+| `onLabelChange` | `({ oldText, newText }) => void` | 否 | - | label 文本变化回调 |
+| `stroke` | `string` | 否 | `"#ffffff"` | 线条颜色 |
+| `strokeWidth` | `number` | 否 | `2` | 线宽 |
+| `dashPattern` | `number[]` | 否 | - | 虚线，例如 `[6, 4]` |
+| `startArrow` | `IArrowStyle` | 否 | - | 起点箭头样式 |
+| `endArrow` | `IArrowStyle` | 否 | `"triangle"` | 终点箭头样式 |
+| `scaleMode` | `"world" \| "pixel"` | 否 | `"world"` | 缩放策略（pixel：线宽/箭头保持像素大小） |
+| `arrowBaseScale` | `number` | 否 | `1` | 箭头基准缩放（配合 pixel 更常用） |
+| `label` | `{ ... }` | 否 | - | 连线文字配置（存在时可显示/编辑） |
+| `label.text` | `string` | 否 | - | 初始文字（空/空白会被视为不创建 label） |
+| `label.editable` | `boolean` | 否 | - | 是否允许编辑（打开 inner editor） |
+| `label.style` | `Partial<ITextInputData>` | 否 | - | 文案样式（fill/fontSize/boxStyle/padding 等） |
+| `labelOnDoubleClick` | `boolean` | 否 | `true` | 是否允许双击连线打开/创建 label |
+
+### `TargetOption`（用于 `opt1/opt2`）表格
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `optX.side` | `"top" \| "right" \| "bottom" \| "left" \| "auto"` | 否 | `"auto"` | 固定连接面，或自动择优 |
+| `optX.percent` | `number` | 否 | `0.5` | 连接点在该面的比例（0~1，0.5=边中点） |
+| `optX.padding` | `number` | 否 | - | 单端 padding（覆盖全局 padding） |
+| `optX.margin` | `number` | 否 | - | 单端 margin（覆盖全局 margin） |
+| `optX.linkPoint` | `IPointData` | 否 | - | 固定连接点（world，优先级最高） |
+
+### 必填
+
+- `from: IUI`：起点节点
+- `to: IUI`：终点节点
+
+### 端点与路由
+
+- `routeType?: "orthogonal" | "bezier" | "straight" | "custom"`  
+  - `"orthogonal"`：正交折线 + 圆角（smart-route）
+  - `"bezier"`：smooth-step 风格曲线（在节点很近/重叠时可选降级为正交）
+  - `"straight"`：直线（仍会包含 linkPoint/paddingPoint 的出线段）
+  - `"custom"`：默认给一个可用结果，但你应通过 `onDraw` 覆盖
+- `padding?: number`：出线段长度（从 linkPoint 沿法线外扩）
+- `margin?: number`：连接点与节点边界的间距（让线不要贴边）
+- `cornerRadius?: number`：正交圆角半径
+- `opt1?: TargetOption` / `opt2?: TargetOption`：单端覆盖（见下方 TargetOption）
+
+### Bezier
+![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/preview.gif)
+
+- `bezierCurvature?: number`：曲率/张力（越大曲线“张开”越明显）
+- `routeOptions?.bezierFallbackDistance?: number`：当 `routeType="bezier"` 时，若两端 padding 点距离小于该值（或节点重叠），可降级为正交圆角  
+  - 默认 `0`：尽量保持贝塞尔
+  - 推荐 `140`：近距离更稳定、避免回勾
+
+### 样式
+
+- `stroke?: string`
+- `strokeWidth?: number`
+- `dashPattern?: number[]`：虚线，例如 `[6, 4]`
+- `startArrow?: IArrowStyle`
+- `endArrow?: IArrowStyle`（默认 `"triangle"`）
+
+### 缩放策略
+
+- `scaleMode?: "world" | "pixel"`  
+  - `"world"`：跟随画布缩放（默认）
+  - `"pixel"`：保持像素大小（线宽/箭头不随 zoom 变化）
+- `arrowBaseScale?: number`：箭头基准缩放（配合 pixel 模式更常用）
+
+### label（连线文字）
+
+- `label?: { text?: string; editable?: boolean; style?: Partial<ITextInputData> }`
+- `labelOnDoubleClick?: boolean`：是否允许双击连线打开/创建 label（默认 true）
+
+> 提示：如果你不传 `style.boxStyle/padding`，组件会给 label 自动加半透明背景遮挡线条，保证可读。
+
+### 更新模式（协同/性能）
+
+- `updateMode?: "event" | "render" | "manual"`
+  - `event`：仅交互事件触发 `update()`（性能最好，默认）
+  - `render`：每帧 `RenderEvent.END` 触发（适合协同/程序改变坐标）
+  - `manual`：完全手动
+- `renderThrottleMs?: number`：`render` 模式节流，推荐 `16~33`
+
+### 协同同步
+
+- `getNodeId?: (node: IUI) => string`：用于 `getState`
+- `onChange?: ({ reason, prev, next, diff, changedKeys }) => void`：结构变化统一回调（用于写入 Yjs diff）
+- `onLabelChange?: ({ oldText, newText }) => void`：label 文本变化
+
+## TargetOption（单端端点策略）
+
+`opt1/opt2` 的字段与优先级（从高到低）：
+
+1. `linkPoint?: IPointData`（world 坐标）：固定连接点（最高优先级）
+2. `side?: "top" | "right" | "bottom" | "left" | "auto"` + `percent?: number`：在某条边上按比例取点
+
+其它：
+
+- `padding?: number` / `margin?: number`：单端覆盖
+- `percent` 默认 `0.5`（边中点）
 
 ## 协同：序列化/恢复（getState / setState）
 
@@ -372,7 +279,7 @@ edge.setState(state, (id) => nodeById.get(id));
 
 ## 协同：onChange / onLabelChange
 
-如果你希望 **重连、label 变化** 都能自动产出 “可同步的 diff”，可以用 `onChange`：
+如果你希望 **label 变化** 能自动产出 “可同步的 diff”，可以用 `onChange`：
 
 ```ts
 const edge = new Connector(app, {
@@ -449,7 +356,7 @@ const edge = new Connector(app, {
 
 ## API 导出
 
-- 导出：`Connector`、`setNodePorts`、`getNodePorts`、以及相关类型（见 `src/types.ts`）
+- 导出：`Connector` 以及相关类型（见 `src/types.ts`）
 
 ## 构建与发布
 
@@ -461,7 +368,6 @@ const edge = new Connector(app, {
 可选：Rollup 生产 bundle（更适合做体积检查/发布前 smoke test）：
 
 ```bash
-cd packages/leafer-connector
 pnpm run bundle:rollup
 ```
 
@@ -470,13 +376,9 @@ pnpm run bundle:rollup
 发布前：
 
 ```bash
-cd packages/leafer-connector
 pnpm run build
 npm publish
 ```
-
-> 如果你是在 monorepo 根目录安装依赖（本项目是这样），也可以在根目录执行：
-> `pnpm -C packages/leafer-connector run build`
 
 ## 备注
 

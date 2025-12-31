@@ -1,6 +1,5 @@
 import type { IPointData, IUI } from "leafer-editor";
 import type { ConnectorAnchorSpec, ConnectorSide } from "./types";
-import { findNearestPort, getNodePorts, portAnchor } from "./ports";
 
 export function centerAnchor(node: IUI): IPointData {
   const b = node.worldBoxBounds;
@@ -138,18 +137,6 @@ export function resolveAnchor(
   if (spec.type === "side") return sideAnchor(node, spec.side);
   if (spec.type === "nearest-side") return nearestSideMidAnchor(node, toward);
   if (spec.type === "nearest-edge") return nearestEdgeAnchor(node, toward);
-  if (spec.type === "port") {
-    const ports = getNodePorts(node);
-    if (ports?.length) {
-      if (spec.portId) {
-        const found = ports.find(p => p.id === spec.portId);
-        if (found) return portAnchor(node, found);
-      }
-      const nearest = findNearestPort(node, toward);
-      if (nearest) return portAnchor(node, nearest);
-    }
-    return nearestEdgeAnchor(node, toward);
-  }
   return centerAnchor(node);
 }
 

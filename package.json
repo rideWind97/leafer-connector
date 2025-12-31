@@ -1,7 +1,7 @@
 {
   "name": "leafer-connector",
   "version": "0.1.0",
-  "description": "A LeaferJS connector (edge) component with anchors/ports, arrows, multiple line types and reconnect interaction.",
+  "description": "A LeaferJS connector (edge) component with arrows, multiple route types, labels, and collaboration helpers.",
   "license": "MIT",
   "homepage": "https://www.npmjs.com/package/leafer-connector",
   "type": "module",

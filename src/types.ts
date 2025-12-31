@@ -5,22 +5,12 @@ export type ConnectorScaleMode = "world" | "pixel";
 
 export type ConnectorSide = "top" | "right" | "bottom" | "left";
 
-export type ConnectorPortUnit = "percent" | "px";
-
-export interface ConnectorPort {
-  id: string;
-  x: number;
-  y: number;
-  unit?: ConnectorPortUnit; // default percent
-}
-
 export type ConnectorAnchorSpec =
   | "center"
   | { type: "center" }
   | { type: "side"; side: ConnectorSide }
   | { type: "nearest-side" }
-  | { type: "nearest-edge" }
-  | { type: "port"; portId?: string };
+  | { type: "nearest-edge" };
 
 export interface ConnectorPoint {
   node: IUI;
@@ -56,10 +46,6 @@ export interface TargetOption {
    * 单端 margin（覆盖全局）
    */
   margin?: number;
-  /**
-   * 使用 portId 固定连接点（优先级高于 side/percent）
-   */
-  portId?: string;
   /**
    * 固定连接点（world 坐标，优先级最高）
    */
@@ -99,12 +85,6 @@ export interface ConnectorOptions {
    */
   opt1?: TargetOption;
   opt2?: TargetOption;
-
-  /**
-   * 为节点定义 ports（可选）：用于 opt.portId 吸附
-   */
-  fromPorts?: ConnectorPort[];
-  toPorts?: ConnectorPort[];
 
   /**
    * 路由类型
@@ -177,25 +157,6 @@ export interface ConnectorOptions {
   getNodeId?: (node: IUI) => string;
 
   /**
-   * 重连时 pick 的命中对象过滤/归一化（例如命中子节点后返回可连接的父节点）
-   */
-  pickFilter?: (pickTarget: IUI) => IUI | null;
-
-  /**
-   * 重连时是否允许连接到某个候选节点
-   */
-  canConnect?: (candidate: IUI, which: "from" | "to") => boolean;
-
-  /**
-   * 重连回调
-   */
-  onReconnect?: (param: {
-    which: "from" | "to";
-    oldNode: IUI;
-    newNode: IUI;
-  }) => void;
-
-  /**
    * label 文本变化回调（用于协同同步 label）
    */
   onLabelChange?: (param: {
@@ -208,7 +169,7 @@ export interface ConnectorOptions {
    * - 依赖 getNodeId，缺失时将无法生成 state（会跳过回调）
    */
   onChange?: (param: {
-    reason: "reconnect" | "label" | "setState";
+    reason: "label" | "setState";
     prev: ConnectorState;
     next: ConnectorState;
     diff: Partial<ConnectorState>;
@@ -225,15 +186,6 @@ export interface ConnectorOptions {
   scaleMode?: ConnectorScaleMode;
   arrowBaseScale?: number;
 
-  handles?: {
-    visible?: boolean; // default false
-    size?: number; // default 10
-    fill?: string; // default "#ffffff"
-    stroke?: string; // default "#000000"
-    strokeWidth?: number; // default 1
-    opacity?: number; // default 1
-  };
-
   label?: {
     text?: string;
     editable?: boolean;
@@ -243,8 +195,8 @@ export interface ConnectorOptions {
 }
 
 export interface ConnectorState {
-  fromId: string;
-  toId: string;
+  fromId: string | number;
+  toId: string | number;
   routeType: ConnectorRouteType;
   padding: number;
   margin: number;

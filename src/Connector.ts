@@ -1,17 +1,17 @@
 import {
   DragEvent,
-  LeafList,
   Group,
   Path,
-  Rect,
   RenderEvent,
   PointerEvent,
+  InnerEditorEvent,
   Text,
   type App,
   type IArrowStyle,
   type IPointData,
   type ITextInputData,
   type IUI,
+  type IBoundsData,
 } from "leafer-editor";
 
 /**
@@ -21,7 +21,6 @@ import {
  * - **坐标系**：路由/避障计算与最终写入 `Path.path` 都使用 Connector 的 local 坐标。
  *   只有在对外回调（如 `onDraw`）时才转换为 world 坐标，避免画布平移/缩放时出现“线条漂移”。
  * - **协同更新**：`updateMode="render"` 时会在 `RenderEvent.END` 触发，并用 `renderThrottleMs` 合并更新。
- * - **重连交互**：拖拽端点结束后用 `tree.pick` 找新节点，`pickFilter/canConnect` 用于过滤候选。
  * - **label**：label 始终放在路径中点，默认加半透明背景遮挡线条，保证可读性。
  */
 
@@ -33,18 +32,25 @@ import type {
   ConnectorState,
   TargetOption,
 } from "./types";
-import { setNodePorts, getNodePorts, portAnchor } from "./ports";
 import { clamp } from "./utils";
-import { buildRoundedPolylinePath, buildOrthogonalBetween, polylineMidpoint, expandRect } from "./route";
+import {
+  buildRoundedPolylinePath,
+  buildOrthogonalBetween,
+  polylineMidpoint,
+  expandRect,
+} from "./route";
 import { getCubicBezierControls, inferSideByPoint } from "./bezier";
 
-function asArrowStyle(style: IArrowStyle | undefined, scale?: number): IArrowStyle | undefined {
+function asArrowStyle(
+  style: IArrowStyle | undefined,
+  scale?: number
+): IArrowStyle | undefined {
   if (!style) return style;
   if (scale == null) return style;
   if (typeof style === "string") return { type: style, scale };
   if (typeof style === "object" && "type" in style) {
-    const old = (style as any).scale;
-    return { ...(style as any), scale: old != null ? old * scale : scale };
+    const old = style.scale;
+    return { ...style, scale: old != null ? old * scale : scale };
   }
   return style;
 }
@@ -63,8 +69,13 @@ function sideOutDir(side: ConnectorSide): { x: number; y: number } {
 }
 
 // local 坐标下：点是否落在轴对齐矩形内部（用于有效 side 过滤/避障）
-function pointInRect(p: IPointData, r: { x: number; y: number; width: number; height: number }) {
-  return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
+function pointInRect(
+  p: IPointData,
+  r: { x: number; y: number; width: number; height: number }
+) {
+  return (
+    p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
+  );
 }
 
 // 去掉连续重复点，避免生成 0 长度线段/影响 rounded path
@@ -78,7 +89,13 @@ function dedupePoints(points: IPointData[]) {
 }
 
 // 计算三次贝塞尔曲线上某个 t 的点（主要用于 label 定位）
-function cubicBezierPoint(p0: IPointData, p1: IPointData, p2: IPointData, p3: IPointData, t: number): IPointData {
+function cubicBezierPoint(
+  p0: IPointData,
+  p1: IPointData,
+  p2: IPointData,
+  p3: IPointData,
+  t: number
+): IPointData {
   const u = 1 - t;
   const tt = t * t;
   const uu = u * u;
@@ -111,7 +128,7 @@ function transformSvgPath(
       .trim()
       .split(/\s+/)
       .filter(Boolean)
-      .map(n => Number(n));
+      .map((n) => Number(n));
     if (!nums.length) {
       out += `${cmd} `;
       continue;
@@ -129,7 +146,11 @@ function transformSvgPath(
   return out.trim();
 }
 
-function stableStringify(value: any): string {
+function stableStringify(value: {
+  text?: string;
+  editable?: boolean;
+  style?: Partial<ITextInputData>;
+}): string {
   // 用于 onChange.diff：将对象做 means-preserving 的“稳定序列化”，避免 key 顺序不同导致误判
   const seen = new WeakSet<object>();
   const norm = (v: any): any => {
@@ -157,11 +178,8 @@ function stableStringify(value: any): string {
 
 export class Connector extends Group {
   readonly wire: Path;
-  readonly fromHandle: Rect;
-  readonly toHandle: Rect;
 
   private readonly _app: App;
-  private readonly _handleSize: number;
 
   private fromNode: IUI;
   private toNode: IUI;
@@ -199,9 +217,6 @@ export class Connector extends Group {
   private _label?: Text;
   private _labelMid: IPointData | null = null;
 
-  private _dragFromWorld: IPointData | null = null;
-  private _dragToWorld: IPointData | null = null;
-
   private _pendingUpdate = false;
   private _lastRenderUpdateAt = 0;
 
@@ -209,15 +224,40 @@ export class Connector extends Group {
   private _labelChangePending = false;
   private _boundNodes = new WeakSet<IUI>();
 
+  /**
+   * 删除 label 节点（当用户清空文本时）
+   * - 会同步清理 this.options.label，确保 getState/onChange 结果一致
+   */
+  private removeLabelNode(oldText?: string) {
+    const label = this._label;
+    if (!label) return;
+
+    // 尽可能从树中移除（不同版本 API 可能叫 remove/removeSelf）
+    const anyLabel = label as Text;
+    anyLabel.destroy();
+
+    this._label = undefined;
+    this._labelMid = null;
+    this._lastLabelText = null;
+    this.options.label = undefined;
+    // 关键：删除 label 后清掉 key，让下一次 update() 必定重算（否则会被 key 去重跳过，导致新建 label 坐标不更新）
+    this._lastKey = null;
+
+    // 删除也视为一次 label 变化：对外通知（用于协同）
+    const prev = String(oldText ?? "");
+    if (prev.trim() !== "") {
+      this.options.onLabelChange?.({ oldText: prev, newText: "" });
+    }
+    this.emitChange("label");
+    this.requestUpdate("event");
+  }
+
   constructor(app: App, options: ConnectorOptions) {
     super({});
     this._app = app;
 
     this.fromNode = options.from;
     this.toNode = options.to;
-
-    if (options.fromPorts?.length) setNodePorts(this.fromNode, options.fromPorts);
-    if (options.toPorts?.length) setNodePorts(this.toNode, options.toPorts);
 
     // 这里先把关键默认值算出来，避免 routeOptions 默认值依赖 margin/padding 时出现顺序问题
     const padding = options.padding ?? 20;
@@ -260,37 +300,25 @@ export class Connector extends Group {
       startArrow: this.options.startArrow,
       endArrow: this.options.endArrow ?? "triangle",
       hitStrokeWidth: 12,
-    } as any);
+    });
 
-    const handles = options.handles || {};
-    const handleVisible = handles.visible === true;
-    const handleSize = handles.size ?? 10;
-    this._handleSize = handleSize;
-    const handleStyle = {
-      width: handleSize,
-      height: handleSize,
-      cornerRadius: handleSize,
-      fill: handles.fill ?? "#ffffff",
-      stroke: handles.stroke ?? "#000000",
-      strokeWidth: handles.strokeWidth ?? 1,
-      opacity: handles.opacity ?? 1,
-      draggable: handleVisible,
-      hitStrokeWidth: 12,
-      visible: handleVisible,
-    };
-    this.fromHandle = new Rect({ ...handleStyle } as any);
-    this.toHandle = new Rect({ ...handleStyle } as any);
+    this.addMany(this.wire);
 
-    this.addMany(this.wire, this.fromHandle, this.toHandle);
-
-    if (this.options.label) this.ensureLabel();
+    // 如果用户一开始就传了 label.text，则立即创建显示；如果 text 为空/空白，则不创建（避免出现空 label 节点）
+    if (
+      this.options.label &&
+      String(this.options.label.text ?? "").trim() !== ""
+    )
+      this.ensureLabel();
 
     this.bindInteractions();
     this.update();
 
     // 协同/程序更新场景（可选）
     if (this.options.updateMode === "render") {
-      this._app.tree?.on_?.(RenderEvent.END, () => this.requestUpdate("render"));
+      this._app.tree?.on_?.(RenderEvent.END, () =>
+        this.requestUpdate("render")
+      );
     }
   }
 
@@ -329,11 +357,14 @@ export class Connector extends Group {
     this.update();
   }
 
-  getState(getNodeId?: (node: IUI) => string): ConnectorState {
-    const fn = getNodeId || this.options.getNodeId || ((n: any) => String(n?.id ?? n?.innerId ?? ""));
-    const fromId = fn(this.fromNode);
-    const toId = fn(this.toNode);
-    if (!fromId || !toId) throw new Error("Connector.getState: missing fromId/toId (provide getNodeId)");
+  getState(): ConnectorState {
+    const fromId = this.fromNode.id ?? this.fromNode.innerId;
+    const toId = this.toNode.id ?? this.toNode.innerId;
+
+    if (!fromId || !toId) {
+      throw new Error("Connector.getState: missing fromId/toId");
+    }
+
     return {
       fromId,
       toId,
@@ -378,8 +409,8 @@ export class Connector extends Group {
       "label",
     ];
     for (const k of keys) {
-      const a = (prev as any)[k];
-      const b = (next as any)[k];
+      const a = prev[k];
+      const b = next[k];
       const same =
         typeof a === "object" || typeof b === "object"
           ? stableStringify(a) === stableStringify(b)
@@ -392,7 +423,7 @@ export class Connector extends Group {
     return { diff, changedKeys };
   }
 
-  private emitChange(reason: "reconnect" | "label" | "setState") {
+  private emitChange(reason: "label" | "setState") {
     if (!this.options.onChange) return;
     try {
       const next = this.getState();
@@ -411,11 +442,12 @@ export class Connector extends Group {
 
   setState(
     state: ConnectorState,
-    resolveNode: (id: string) => IUI | undefined
+    resolveNode: (id: string | number) => IUI | undefined
   ) {
     const from = resolveNode(state.fromId);
     const to = resolveNode(state.toId);
-    if (!from || !to) throw new Error("Connector.setState: resolveNode failed for fromId/toId");
+    if (!from || !to)
+      throw new Error("Connector.setState: resolveNode failed for fromId/toId");
 
     this.fromNode = from;
     this.toNode = to;
@@ -434,7 +466,8 @@ export class Connector extends Group {
     this.options.startArrow = state.startArrow;
     this.options.endArrow = state.endArrow;
     this.options.scaleMode = state.scaleMode ?? this.options.scaleMode;
-    this.options.arrowBaseScale = state.arrowBaseScale ?? this.options.arrowBaseScale;
+    this.options.arrowBaseScale =
+      state.arrowBaseScale ?? this.options.arrowBaseScale;
 
     // style 直接写到 wire
     this.wire.set({
@@ -443,7 +476,7 @@ export class Connector extends Group {
       dashPattern: this.options.dashPattern,
       startArrow: this.options.startArrow,
       endArrow: this.options.endArrow ?? "triangle",
-    } as any);
+    });
 
     // label
     this.options.label = state.label;
@@ -459,10 +492,25 @@ export class Connector extends Group {
   }
 
   setLabelText(text: string) {
+    // 规范化：
+    // - 允许回车换行（不要剔除 \n/\r）
+    // - 去掉整体前后空白字符（用户提的“前后空字符”）
+    const next = String(text ?? "").trim();
+    // 空文本：删除 label 节点
+    if (next === "") {
+      const old = String(this._label?.text ?? this.options.label?.text ?? "");
+      this.removeLabelNode(old);
+      return;
+    }
+
     const label = this.ensureLabel();
     const old = String(label.text ?? "");
-    label.text = text;
+    label.text = next;
     const now = String(label.text ?? "");
+
+    // 同步到 options（用于 getState/onChange）
+    this.options.label = { ...(this.options.label || {}), text: now };
+
     if (old !== now) {
       this.options.onLabelChange?.({ oldText: old, newText: now });
       this.emitChange("label");
@@ -477,7 +525,7 @@ export class Connector extends Group {
       textAlign: "center",
       verticalAlign: "middle",
       autoSizeAlign: true,
-    } as any);
+    });
     this.requestUpdate("event");
   }
 
@@ -488,17 +536,11 @@ export class Connector extends Group {
 
     // 默认背景遮线（用户自定义 boxStyle/padding 时不覆盖）
     // 目的：label 永远可读，不会被线条穿过影响识别
-    const withDefaultBg: Partial<ITextInputData> = { ...(style as any) };
-    if ((withDefaultBg as any).fill == null) (withDefaultBg as any).fill = "#ffffff";
-    if ((withDefaultBg as any).fontSize == null) (withDefaultBg as any).fontSize = 12;
-    if ((withDefaultBg as any).padding == null) (withDefaultBg as any).padding = [2, 6];
-    if ((withDefaultBg as any).boxStyle == null) {
-      (withDefaultBg as any).boxStyle = { fill: "#00000099", cornerRadius: 6 };
-    }
+    const withDefaultBg: Partial<ITextInputData> = { fill: "#ffffff", fontSize: 12, padding: [2, 6], boxStyle: { fill: "#00000099", cornerRadius: 6 }, ...style };
 
     const label = new Text({
-      ...(withDefaultBg as any),
-      text: cfg.text ?? (withDefaultBg as any).text ?? "",
+      ...withDefaultBg,
+      text: cfg.text ?? withDefaultBg.text ?? "", 
       textAlign: "center",
       verticalAlign: "middle",
       autoSizeAlign: true,
@@ -512,15 +554,55 @@ export class Connector extends Group {
       },
       draggable: false,
       hitStrokeWidth: 8,
-    } as any);
+    });
 
     this._label = label;
     this._lastLabelText = String(label.text ?? "");
+    // 同步：确保 options.label 至少包含当前 text（用于 getState/onChange）
+    this.options.label = {
+      ...cfg,
+      text: String(label.text ?? ""),
+    };
     this.add(label);
+    // 关键：新建 label 后清掉 key，强制下一次 update() 计算 labelMid 并把 label 放回连线中点
+    this._lastKey = null;
     this.update();
+
+    // 编辑关闭：做一次最终规范化（去掉前后空白）；若清空则删除 label 节点
+    label.on_(InnerEditorEvent.CLOSE, () => {
+      if (this._label !== label) return;
+      // CLOSE 时做最终规范化：允许回车换行，仅做 trim
+      const raw = String(label.text ?? "");
+      const trimmed = raw.trim();
+      const prev = String(this._lastLabelText ?? "");
+
+      if (trimmed === "") {
+        this.removeLabelNode(prev);
+        return;
+      }
+
+      if (trimmed !== raw) label.text = trimmed;
+      this._lastLabelText = trimmed;
+      this.options.label = {
+        ...(this.options.label || {}),
+        text: trimmed,
+      };
+
+      const editor = label.app.editor;
+      if (!editor) return;
+      if (editor.getItem?.() === label) editor.cancel?.();
+
+      if (prev !== trimmed) {
+        this.options.onLabelChange?.({ oldText: prev, newText: trimmed });
+        this.emitChange("label");
+      }
+      this.requestUpdate("event");
+    });
 
     // 监听 label 文本变化：用 RenderEvent.END 兜底（编辑器输入时一般会触发渲染）
     label.on_(RenderEvent.END, () => {
+      // 若 label 已被删除（例如用户清空文本触发 remove），则忽略后续事件
+      if (this._label !== label) return;
       const cur = String(label.text ?? "");
       const prev = this._lastLabelText ?? "";
       if (cur === prev) return;
@@ -532,9 +614,24 @@ export class Connector extends Group {
       this._labelChangePending = true;
       queueMicrotask(() => {
         this._labelChangePending = false;
-        const now = String(label.text ?? "");
+        if (this._label !== label) return;
+        let now = String(label.text ?? "");
         const old = prev;
+
+        // 允许回车换行：不再剔除换行符
+
+        // 规则：trim 后为空 => 删除 label 节点
+        if (now.trim() === "") {
+          this.removeLabelNode(old);
+          return;
+        }
+
         if (now !== old) {
+          // 同步到 options（用于 getState/onChange）
+          this.options.label = {
+            ...(this.options.label || {}),
+            text: now,
+          };
           this.options.onLabelChange?.({ oldText: old, newText: now });
           this.emitChange("label");
           this.requestUpdate("event");
@@ -546,9 +643,19 @@ export class Connector extends Group {
   }
 
   private openOrCreateLabelEditor() {
-    const label = this.ensureLabel();
-    const editor = (this._app as any)?.editor;
-    editor?.openInnerEditor?.(label, true);
+    if (!this._label) {
+      const cur = String(this.options.label?.text ?? "");
+      if (cur.trim() === "") {
+        this.options.label = {
+          ...(this.options.label || {}),
+          text: "默认文案",
+          editable: true,
+        };
+      }
+    }
+    this.ensureLabel();
+    // 再 update 一次兜底：保证 labelMid 已产生（尤其是刚刚重建 label 的场景）
+    this.update();
   }
 
   private buildCandidatePoints(
@@ -567,7 +674,10 @@ export class Connector extends Group {
       const side = inferSideByPoint(node, opt.linkPoint);
       const dir = sideOutDir(side);
       const linkPoint = this.getWorldPoint(lp);
-      const paddingPointLocal = { x: lp.x + dir.x * padding, y: lp.y + dir.y * padding };
+      const paddingPointLocal = {
+        x: lp.x + dir.x * padding,
+        y: lp.y + dir.y * padding,
+      };
       const paddingPoint = this.getWorldPoint(paddingPointLocal);
       return [
         {
@@ -582,32 +692,10 @@ export class Connector extends Group {
       ];
     }
 
-    // portId
-    if (opt?.portId) {
-      const ports = getNodePorts(node);
-      const found = ports?.find(p => p.id === opt.portId);
-      if (found) {
-        const wp = portAnchor(node, found);
-        const lp = this.getLocalPoint(wp);
-        const side = inferSideByPoint(node, wp);
-        const dir = sideOutDir(side);
-        const paddingPointLocal = { x: lp.x + dir.x * padding, y: lp.y + dir.y * padding };
-        return [
-          {
-            node,
-            side,
-            percent,
-            margin,
-            padding,
-            linkPoint: wp,
-            paddingPoint: this.getWorldPoint(paddingPointLocal),
-          },
-        ];
-      }
-    }
-
     const sides: ConnectorSide[] =
-      opt?.side && opt.side !== "auto" ? [opt.side] : ["top", "right", "bottom", "left"];
+      opt?.side && opt.side !== "auto"
+        ? [opt.side]
+        : ["top", "right", "bottom", "left"];
 
     // 用 local rect 计算点位（避免画布平移/缩放带来的 world 误差）
     // 这是修复“平移画布后连线漂移”的关键：Path.path 需要写 local 坐标
@@ -620,13 +708,16 @@ export class Connector extends Group {
         s === "top"
           ? { x: r.x + r.width * percent, y: r.y }
           : s === "bottom"
-            ? { x: r.x + r.width * percent, y: r.y + r.height }
-            : s === "left"
-              ? { x: r.x, y: r.y + r.height * percent }
-              : { x: r.x + r.width, y: r.y + r.height * percent };
+          ? { x: r.x + r.width * percent, y: r.y + r.height }
+          : s === "left"
+          ? { x: r.x, y: r.y + r.height * percent }
+          : { x: r.x + r.width, y: r.y + r.height * percent };
 
       const dir = sideOutDir(s);
-      const padLocal = { x: linkLocal.x + dir.x * padding, y: linkLocal.y + dir.y * padding };
+      const padLocal = {
+        x: linkLocal.x + dir.x * padding,
+        y: linkLocal.y + dir.y * padding,
+      };
 
       // valid side：padding 点落入对方 bounds 则判无效（避免“出线就插进对方节点内部”）
       if (pointInRect(padLocal, otherExpanded)) continue;
@@ -649,12 +740,15 @@ export class Connector extends Group {
           s === "top"
             ? { x: r.x + r.width * percent, y: r.y }
             : s === "bottom"
-              ? { x: r.x + r.width * percent, y: r.y + r.height }
-              : s === "left"
-                ? { x: r.x, y: r.y + r.height * percent }
-                : { x: r.x + r.width, y: r.y + r.height * percent };
+            ? { x: r.x + r.width * percent, y: r.y + r.height }
+            : s === "left"
+            ? { x: r.x, y: r.y + r.height * percent }
+            : { x: r.x + r.width, y: r.y + r.height * percent };
         const dir = sideOutDir(s);
-        const padLocal = { x: linkLocal.x + dir.x * padding, y: linkLocal.y + dir.y * padding };
+        const padLocal = {
+          x: linkLocal.x + dir.x * padding,
+          y: linkLocal.y + dir.y * padding,
+        };
         points.push({
           node,
           side: s,
@@ -675,36 +769,29 @@ export class Connector extends Group {
       // manual 模式：默认不自动更新（除非用户 invalidate / update 触发）
       // 这里不强制 return，因为用户可能手动调用 update() 进行刷新
     }
-    // 处理拖拽自由端点（world），优先级最高
-    if (this._dragFromWorld || this._dragToWorld) {
-      const fromW = this._dragFromWorld ?? this.getWorldPoint(this.getLocalPoint(centerOf(this.fromNode.worldBoxBounds)));
-      const toW = this._dragToWorld ?? this.getWorldPoint(this.getLocalPoint(centerOf(this.toNode.worldBoxBounds)));
-      const fromL = this.getLocalPoint(fromW);
-      const toL = this.getLocalPoint(toW);
-
-      const points = dedupePoints([fromL, toL]);
-      const d = `M ${points[0]!.x} ${points[0]!.y} L ${points[points.length - 1]!.x} ${points[points.length - 1]!.y}`;
-      (this.wire as any).path = d;
-      this.positionHandles(fromL, toL);
-      this.positionLabel(points);
-      this.applyScaleMode();
-      return;
-    }
-
     // 去重 key：基于两端 bounds + 配置（粗略即可）
     // 协同场景下，频繁 END 帧/坐标同步会调用 update()，key 去重能大幅减少重算/重绘
     const fb = this.fromNode.worldBoxBounds;
     const tb = this.toNode.worldBoxBounds;
-    const key = `${fb.x.toFixed(1)},${fb.y.toFixed(1)},${fb.width.toFixed(1)},${fb.height.toFixed(1)}|${tb.x.toFixed(1)},${tb.y.toFixed(1)},${tb.width.toFixed(1)},${tb.height.toFixed(1)}|${this.options.routeType}|${this.options.padding}|${this.options.margin}|${this.options.cornerRadius}|${this.options.scaleMode}`;
+    const key = `${fb.x.toFixed(1)},${fb.y.toFixed(1)},${fb.width.toFixed(
+      1
+    )},${fb.height.toFixed(1)}|${tb.x.toFixed(1)},${tb.y.toFixed(
+      1
+    )},${tb.width.toFixed(1)},${tb.height.toFixed(1)}|${
+      this.options.routeType
+    }|${this.options.padding}|${this.options.margin}|${
+      this.options.cornerRadius
+    }|${this.options.scaleMode}`;
     if (this._lastKey === key) {
-      if (this._label && this._labelMid) this._label.set({ x: this._labelMid.x, y: this._labelMid.y } as any);
+      if (this._label && this._labelMid)
+        this._label.set({ x: this._labelMid.x, y: this._labelMid.y });
       return;
     }
     this._lastKey = key;
 
     // world bounds -> local rect
     // 注意：worldBoxBounds 会随着画布/父容器 transform 变化；转换到 local 后再做路由/避障更稳定
-    const rectToLocal = (r: any) => {
+    const rectToLocal = (r: IBoundsData) => {
       const p1 = this.getLocalPoint({ x: r.x, y: r.y });
       const p2 = this.getLocalPoint({ x: r.x + r.width, y: r.y + r.height });
       const x1 = Math.min(p1.x, p2.x);
@@ -717,12 +804,28 @@ export class Connector extends Group {
     const fromRectLocal = rectToLocal(fb);
     const toRectLocal = rectToLocal(tb);
 
-    const sCandidates = this.buildCandidatePoints(this.fromNode, this.options.opt1, fromRectLocal, toRectLocal);
-    const eCandidates = this.buildCandidatePoints(this.toNode, this.options.opt2, toRectLocal, fromRectLocal);
+    const sCandidates = this.buildCandidatePoints(
+      this.fromNode,
+      this.options.opt1,
+      fromRectLocal,
+      toRectLocal
+    );
+    const eCandidates = this.buildCandidatePoints(
+      this.toNode,
+      this.options.opt2,
+      toRectLocal,
+      fromRectLocal
+    );
 
     const avoidRects = [
-      expandRect(fromRectLocal, this.options.routeOptions?.avoidPadding ?? this.options.margin),
-      expandRect(toRectLocal, this.options.routeOptions?.avoidPadding ?? this.options.margin),
+      expandRect(
+        fromRectLocal,
+        this.options.routeOptions?.avoidPadding ?? this.options.margin
+      ),
+      expandRect(
+        toRectLocal,
+        this.options.routeOptions?.avoidPadding ?? this.options.margin
+      ),
     ];
 
     const routeType: ConnectorRouteType = this.options.routeType;
@@ -764,28 +867,48 @@ export class Connector extends Group {
             fromRectLocal.y + fromRectLocal.height > toRectLocal.y;
 
           // 近距离/重叠：Bezier 很容易丑（回勾/贴边），自动降级为正交圆角（更像流程图工具）
-          const bezFallback = this.options.routeOptions?.bezierFallbackDistance ?? 140;
+          const bezFallback =
+            this.options.routeOptions?.bezierFallbackDistance ?? 140;
           if ((overlapX && overlapY) || dist < bezFallback) {
             const mid = buildOrthogonalBetween(sPadL, ePadL, avoidRects, {
               radius: this.options.cornerRadius,
-              intersectionPenalty: this.options.routeOptions?.intersectionPenalty,
+              intersectionPenalty:
+                this.options.routeOptions?.intersectionPenalty,
               longStraightRatio: this.options.routeOptions?.longStraightRatio,
               longStraightWeight: this.options.routeOptions?.longStraightWeight,
               enableSRoutes: this.options.routeOptions?.enableSRoutes,
             });
             const full = dedupePoints([sLinkL, ...mid.points, eLinkL]);
-            const pathLocal = buildRoundedPolylinePath(full, this.options.cornerRadius);
+            const pathLocal = buildRoundedPolylinePath(
+              full,
+              this.options.cornerRadius
+            );
             const labelMid = polylineMidpoint(full);
             const score = mid.score + 1000; // 轻微偏好真 bezier（当两者都可用时）
-            if (!best || score < best.score) best = { s, e, pointsLocal: full, pathLocal, score, labelMid };
+            if (!best || score < best.score)
+              best = { s, e, pointsLocal: full, pathLocal, score, labelMid };
             continue;
           }
 
-          const { c1, c2 } = getCubicBezierControls(sPadL, ePadL, fromSide, toSide, this.options.bezierCurvature);
+          const { c1, c2 } = getCubicBezierControls(
+            sPadL,
+            ePadL,
+            fromSide,
+            toSide,
+            this.options.bezierCurvature
+          );
           const d = `M ${sLinkL.x} ${sLinkL.y} L ${sPadL.x} ${sPadL.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${ePadL.x} ${ePadL.y} L ${eLinkL.x} ${eLinkL.y}`;
           const labelMid = cubicBezierPoint(sPadL, c1, c2, ePadL, 0.5);
           const score = dist;
-          if (!best || score < best.score) best = { s, e, pointsLocal: [sLinkL, sPadL, ePadL, eLinkL], pathLocal: d, score, labelMid };
+          if (!best || score < best.score)
+            best = {
+              s,
+              e,
+              pointsLocal: [sLinkL, sPadL, ePadL, eLinkL],
+              pathLocal: d,
+              score,
+              labelMid,
+            };
           continue;
         } else if (routeType === "custom") {
           // custom：默认仍给出一条可用的“直连 padding”结果，真正自定义交给 onDraw 覆盖
@@ -804,11 +927,15 @@ export class Connector extends Group {
         }
 
         const full = dedupePoints([sLinkL, ...midPoints, eLinkL]);
-        const pathLocal = buildRoundedPolylinePath(full, this.options.cornerRadius);
+        const pathLocal = buildRoundedPolylinePath(
+          full,
+          this.options.cornerRadius
+        );
         const labelMid = polylineMidpoint(full);
         const score = midScore;
 
-        if (!best || score < best.score) best = { s, e, pointsLocal: full, pathLocal, score, labelMid };
+        if (!best || score < best.score)
+          best = { s, e, pointsLocal: full, pathLocal, score, labelMid };
       }
     }
 
@@ -816,70 +943,71 @@ export class Connector extends Group {
 
     // onDraw（可覆盖）：默认结果以 world 坐标提供
     // 原因：业务侧通常以 world 坐标理解场景；同时可避免误把 local path 当 world 导致漂移
-    const defaultWorldPoints = best.pointsLocal.map(p => this.getWorldPoint(p));
-    const defaultWorldPath = transformSvgPath(best.pathLocal, p => this.getWorldPoint(p));
-    const defaultResult = { points: defaultWorldPoints, path: defaultWorldPath };
+    const defaultWorldPoints = best.pointsLocal.map((p) =>
+      this.getWorldPoint(p)
+    );
+    const defaultWorldPath = transformSvgPath(best.pathLocal, (p) =>
+      this.getWorldPoint(p)
+    );
+    const defaultResult = {
+      points: defaultWorldPoints,
+      path: defaultWorldPath,
+    };
     if (this.options.onDraw) {
-      const override = this.options.onDraw({ s: best.s, e: best.e, defaultResult });
+      const override = this.options.onDraw({
+        s: best.s,
+        e: best.e,
+        defaultResult,
+      });
       if (override?.path && typeof override.path === "string") {
         // path 视为 world 坐标，转成 local 后再写入 Path.path
-        best.pathLocal = transformSvgPath(override.path, p => this.getLocalPoint(p));
+        best.pathLocal = transformSvgPath(override.path, (p) =>
+          this.getLocalPoint(p)
+        );
         // label：若没有提供 points，则沿用默认中点
       }
       if (override?.points?.length) {
-        const ptsLocal = dedupePoints(override.points.map(p => this.getLocalPoint(p)));
+        const ptsLocal = dedupePoints(
+          override.points.map((p) => this.getLocalPoint(p))
+        );
         best.pointsLocal = ptsLocal;
-        best.pathLocal = buildRoundedPolylinePath(ptsLocal, this.options.cornerRadius);
+        best.pathLocal = buildRoundedPolylinePath(
+          ptsLocal,
+          this.options.cornerRadius
+        );
         best.labelMid = polylineMidpoint(ptsLocal);
       }
     }
 
-    (this.wire as any).path = best.pathLocal;
-
-    // handle：落在 linkPoint（local）
-    const sLinkL = this.getLocalPoint(best.s.linkPoint);
-    const eLinkL = this.getLocalPoint(best.e.linkPoint);
-    this.positionHandles(sLinkL, eLinkL);
+    this.wire.path = best.pathLocal;
 
     // label
     this._labelMid = best.labelMid;
-    if (this._label) this._label.set({ x: best.labelMid.x, y: best.labelMid.y } as any);
+    if (this._label)
+      this._label.set({ x: best.labelMid.x, y: best.labelMid.y });
 
     this.applyScaleMode();
   }
 
-  private positionHandles(from: IPointData, to: IPointData) {
-    const fhw = (this.fromHandle.width ?? this._handleSize) / 2;
-    const fhh = (this.fromHandle.height ?? this._handleSize) / 2;
-    const thw = (this.toHandle.width ?? this._handleSize) / 2;
-    const thh = (this.toHandle.height ?? this._handleSize) / 2;
-    this.fromHandle.set({ x: from.x - fhw, y: from.y - fhh } as any);
-    this.toHandle.set({ x: to.x - thw, y: to.y - thh } as any);
-  }
-
-  private positionLabel(pointsLocal: IPointData[]) {
-    if (!this._label) return;
-    const mid = polylineMidpoint(pointsLocal);
-    this._labelMid = mid;
-    this._label.set({ x: mid.x, y: mid.y } as any);
-  }
-
   private applyScaleMode() {
-    const strokeTarget: any = this.wire;
+    const strokeTarget: Path = this.wire;
     if (this.options.scaleMode === "pixel") {
       strokeTarget.strokeWidthFixed = true;
       const scale = Math.max(
-        Math.abs((strokeTarget.worldTransform as any).scaleX || 1),
-        Math.abs((strokeTarget.worldTransform as any).scaleY || 1)
+        Math.abs(strokeTarget.worldTransform.scaleX || 1),
+        Math.abs(strokeTarget.worldTransform.scaleY || 1)
       );
       const inv = scale ? 1 / scale : 1;
       const s = inv * this.options.arrowBaseScale;
-      strokeTarget.startArrow = asArrowStyle(this.options.startArrow, s) as any;
-      strokeTarget.endArrow = asArrowStyle(this.options.endArrow ?? "triangle", s) as any;
+      strokeTarget.startArrow = asArrowStyle(this.options.startArrow, s);
+      strokeTarget.endArrow = asArrowStyle(
+        this.options.endArrow ?? "triangle",
+        s
+      );
     } else {
       strokeTarget.strokeWidthFixed = false;
-      strokeTarget.startArrow = this.options.startArrow as any;
-      strokeTarget.endArrow = (this.options.endArrow ?? "triangle") as any;
+      strokeTarget.startArrow = this.options.startArrow;
+      strokeTarget.endArrow = this.options.endArrow ?? "triangle";
     }
   }
 
@@ -903,73 +1031,5 @@ export class Connector extends Group {
       bindNode(this.fromNode);
       bindNode(this.toNode);
     }
-
-    const onHandleDrag = (which: "from" | "to") => {
-      const handle = which === "from" ? this.fromHandle : this.toHandle;
-      handle.on_(DragEvent.DRAG, () => {
-        const hx = handle.x ?? 0;
-        const hy = handle.y ?? 0;
-        const hw = handle.width ?? this._handleSize;
-        const hh = handle.height ?? this._handleSize;
-        const pLocal = { x: hx + hw / 2, y: hy + hh / 2 };
-        const pWorld = this.getWorldPoint(pLocal);
-        if (which === "from") this._dragFromWorld = pWorld;
-        else this._dragToWorld = pWorld;
-        this.requestUpdate("event");
-      });
-
-      handle.on_(DragEvent.END, () => {
-        const hx = handle.x ?? 0;
-        const hy = handle.y ?? 0;
-        const hw = handle.width ?? this._handleSize;
-        const hh = handle.height ?? this._handleSize;
-        const pLocal = { x: hx + hw / 2, y: hy + hh / 2 };
-        const pWorld = this.getWorldPoint(pLocal);
-
-        const tree = this._app.tree as any;
-        if (!tree?.pick) return;
-
-        // pick 排除自身/连线/handles/label，避免“捡到自己”导致无法重连
-        const exclude = new LeafList([this, this.wire, this.fromHandle, this.toHandle, this._label] as any);
-        const pick = tree.pick(pWorld, { exclude });
-        let target = pick?.target as IUI | undefined;
-        if (target && this.options.pickFilter) target = this.options.pickFilter(target) || undefined;
-        if (target && this.options.canConnect && !this.options.canConnect(target, which)) target = undefined;
-
-        if (target && target !== this.wire && target !== this.fromHandle && target !== this.toHandle) {
-          if (which === "from") {
-            const oldNode = this.fromNode;
-            this.fromNode = target;
-            if (this.options.updateMode !== "manual") bindNode(target);
-            this.options.onReconnect?.({ which, oldNode, newNode: target });
-            this.emitChange("reconnect");
-          } else {
-            const oldNode = this.toNode;
-            this.toNode = target;
-            if (this.options.updateMode !== "manual") bindNode(target);
-            this.options.onReconnect?.({ which, oldNode, newNode: target });
-            this.emitChange("reconnect");
-          }
-          // 重连成功：清掉自由端点
-          if (which === "from") this._dragFromWorld = null;
-          else this._dragToWorld = null;
-        } else {
-          // 未命中：保持自由端点
-          if (which === "from") this._dragFromWorld = pWorld;
-          else this._dragToWorld = pWorld;
-        }
-
-        this.update();
-      });
-    };
-
-    onHandleDrag("from");
-    onHandleDrag("to");
   }
 }
-
-function centerOf(b: any): IPointData {
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-}
-
-
