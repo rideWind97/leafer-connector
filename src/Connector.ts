@@ -413,7 +413,7 @@ export class Connector extends Group {
       const b = next[k];
       const same =
         typeof a === "object" || typeof b === "object"
-          ? stableStringify(a) === stableStringify(b)
+          ? stableStringify(a as { text?: string; editable?: boolean; style?: Partial<ITextInputData> }) === stableStringify(b as { text?: string; editable?: boolean; style?: Partial<ITextInputData> })
           : a === b;
       if (!same) {
         (diff as any)[k] = b;
