@@ -68,7 +68,7 @@ const edge = new Connector(app, {
   },
 });
 ```
-![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/bezier.gif)
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/bezier.gif)
 
 
 ### 直线（straight）
@@ -80,7 +80,7 @@ const edge = new Connector(app, {
   routeType: "straight",
 });
 ```
-![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/straight.gif)
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/straight.gif)
 
 ### 自定义（custom + onDraw）
 
@@ -106,7 +106,7 @@ const edge = new Connector(app, {
   },
 });
 ```
-![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/custom.gif)
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/custom.gif)
 
 ## label（连线文字）示例
 
@@ -119,7 +119,7 @@ const edge = new Connector(app, {
   label: { text: "Hello", editable: true },
 });
 ```
-![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/name.gif)
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/name.gif)
 
 ### 自定义 label 样式
 
