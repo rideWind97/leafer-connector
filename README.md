@@ -210,7 +210,6 @@ const edge = new Connector(app, {
 - `opt1?: TargetOption` / `opt2?: TargetOption`：单端覆盖（见下方 TargetOption）
 
 ### Bezier
-![Preview](https://github.com/qlynick/leafer-x-connector/blob/main/playground/assets/preview.gif)
 
 - `bezierCurvature?: number`：曲率/张力（越大曲线“张开”越明显）
 - `routeOptions?.bezierFallbackDistance?: number`：当 `routeType="bezier"` 时，若两端 padding 点距离小于该值（或节点重叠），可降级为正交圆角  
