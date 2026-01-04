@@ -20,7 +20,8 @@
     "edge",
     "arrow",
     "diagram",
-    "flow"
+    "flow",
+    "leafer-connector"
   ],
   "files": [
     "dist",
