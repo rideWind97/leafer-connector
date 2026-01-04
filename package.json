@@ -1,6 +1,6 @@
 {
   "name": "leafer-connector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A LeaferJS connector (edge) component with arrows, multiple route types, labels, and collaboration helpers.",
   "license": "MIT",
   "homepage": "https://github.com/rideWind97/leafer-connector",
@@ -63,5 +63,3 @@
     "access": "public"
   }
 }
-
-
