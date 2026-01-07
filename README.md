@@ -4,6 +4,16 @@
 
 你可以把它理解成：**给两个 `IUI` 节点自动画出一条“像流程图工具一样”的连线**，并支持 label、协同等能力。
 
+## 支持与反馈
+
+如果这个项目对你有帮助，欢迎点个 **Star** 支持一下：  
+- ⭐️ 点我去 Star：[rideWind97/leafer-connector](https://github.com/rideWind97/leafer-connector)
+
+遇到问题 / 有需求 / 想讨论实现方案，也欢迎提 **Issue**：  
+- 🐞/💡 点我去提 Issue：[Issues](https://github.com/rideWind97/leafer-connector/issues)
+
+也非常欢迎 PR（修 bug、补文档、加示例都很棒），我会尽量及时跟进。
+
 ## 能力概览
 
 - **连接 2 个节点**：`from/to: IUI`
