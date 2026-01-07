@@ -606,4 +606,48 @@ export class Connector extends Group {
     this.bindInteractions();
     this.requestUpdate("event");
   }
+
+  /**
+   * 将 Connector 从 node-mode 切换到 point-mode（运行时切换）。
+   * - 会解绑旧交互监听并按 point-mode 重新绑定
+   * - 会清理 node 引用与拖拽态
+   * - 默认会把 updateMode 切到 "manual"（因为 point-mode 只依赖点坐标，通常由业务侧手动刷新/控制）
+   */
+  switchToPointMode(
+    fromPoint: IPointData,
+    toPoint: IPointData,
+    opts?: {
+      /**
+       * 切换后是否自动将 updateMode 设为 "manual"
+       * - 默认 true：切到 point-mode 通常不需要监听节点事件
+       */
+      autoUpdateMode?: boolean;
+      /**
+       * 强制设置 updateMode
+       */
+      updateMode?: "event" | "render" | "manual";
+    }
+  ) {
+    this._mode = "point";
+    this.fromPointWorld = fromPoint;
+    this.toPointWorld = toPoint;
+    this.fromNode = null;
+    this.toNode = null;
+
+    // reset edit/drag state
+    this._editingPoints = false;
+    this._dragFromWorld = null;
+    this._dragToWorld = null;
+    this.setHandlesVisible(false);
+
+    if (opts?.updateMode) {
+      this.options.updateMode = opts.updateMode;
+    } else if (opts?.autoUpdateMode !== false) {
+      this.options.updateMode = "manual";
+    }
+
+    this.invalidate();
+    this.bindInteractions();
+    this.requestUpdate("event");
+  }
 }

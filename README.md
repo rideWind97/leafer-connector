@@ -112,6 +112,36 @@ edge.switchToNodeMode(a, b, { updateMode: "render" });
   - **`opts.autoUpdateMode`**：`boolean`，默认 `true`。为 `true` 时（且未传 `opts.updateMode`），会将 `updateMode` 设为 `"event"`
   - **`opts.updateMode`**：`"event" | "render" | "manual"`，强制设置切换后的更新模式
 
+### 模式切换（Node → Point）
+
+当你希望“先连节点”，后续又想把它变成“纯点坐标线”（不再依赖节点）时，可以用：
+
+```ts
+// 从 node-mode 切换到 point-mode
+edge.switchToPointMode({ x: 120, y: 160 }, { x: 520, y: 320 });
+
+// 或者显式指定 updateMode
+edge.switchToPointMode(
+  { x: 120, y: 160 },
+  { x: 520, y: 320 },
+  { updateMode: "manual" }
+);
+```
+
+行为说明：
+
+- 会解绑旧的交互监听并按 point-mode 重新绑定
+- 会清理 node 引用与拖拽态
+- 默认会把 `updateMode` 切到 `"manual"`（因为 point-mode 通常由业务侧手动刷新/控制）
+
+参数说明：
+
+- **`fromPoint`**：`IPointData`，起点坐标（world）
+- **`toPoint`**：`IPointData`，终点坐标（world）
+- **`opts`**（可选）：
+  - **`opts.autoUpdateMode`**：`boolean`，默认 `true`。为 `true` 时（且未传 `opts.updateMode`），会将 `updateMode` 设为 `"manual"`
+  - **`opts.updateMode`**：`"event" | "render" | "manual"`，强制设置切换后的更新模式
+
 ## 路由示例
 
 ### 正交（orthogonal）
@@ -445,6 +475,7 @@ const edge = new Connector(app, {
 | 方法 | 说明 |
 | --- | --- |
 | `switchToNodeMode(from, to, opts?)` | 从 point-mode 切换到 node-mode，并重新绑定交互监听（详见上方“模式切换”小节） |
+| `switchToPointMode(fromPoint, toPoint, opts?)` | 从 node-mode 切换到 point-mode，并重新绑定交互监听（详见上方“模式切换”小节） |
 
 ## 构建与发布
 
