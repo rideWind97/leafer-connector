@@ -2,10 +2,12 @@ import {
   DragEvent,
   Group,
   Path,
+  Rect,
   RenderEvent,
   PointerEvent,
   InnerEditorEvent,
   Text,
+  LeafList,
   type App,
   type IArrowStyle,
   type IPointData,
@@ -66,6 +68,15 @@ function sideOutDir(side: ConnectorSide): { x: number; y: number } {
     case "bottom":
       return { x: 0, y: 1 };
   }
+}
+
+function inferSideByVector(dx: number, dy: number): ConnectorSide {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "right" : "left";
+  return dy >= 0 ? "bottom" : "top";
+}
+
+function centerOfBounds(b: IBoundsData): IPointData {
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
 
 // local 坐标下：点是否落在轴对齐矩形内部（用于有效 side 过滤/避障）
@@ -146,11 +157,7 @@ function transformSvgPath(
   return out.trim();
 }
 
-function stableStringify(value: {
-  text?: string;
-  editable?: boolean;
-  style?: Partial<ITextInputData>;
-}): string {
+function stableStringify(value: any): string {
   // 用于 onChange.diff：将对象做 means-preserving 的“稳定序列化”，避免 key 顺序不同导致误判
   const seen = new WeakSet<object>();
   const norm = (v: any): any => {
@@ -178,11 +185,23 @@ function stableStringify(value: {
 
 export class Connector extends Group {
   readonly wire: Path;
+  readonly fromHandle: Rect;
+  readonly toHandle: Rect;
 
   private readonly _app: App;
 
-  private fromNode: IUI;
-  private toNode: IUI;
+  private readonly _handleSize: number;
+
+  private _mode: "node" | "point";
+
+  private fromNode: IUI | null = null;
+  private toNode: IUI | null = null;
+  private fromPointWorld: IPointData | null = null;
+  private toPointWorld: IPointData | null = null;
+
+  private _editingPoints = false;
+  private _dragFromWorld: IPointData | null = null;
+  private _dragToWorld: IPointData | null = null;
   private options: Required<
     Pick<
       ConnectorOptions,
@@ -224,6 +243,124 @@ export class Connector extends Group {
   private _labelChangePending = false;
   private _boundNodes = new WeakSet<IUI>();
 
+  private setHandlesVisible(visible: boolean) {
+    this.fromHandle.visible = visible;
+    this.toHandle.visible = visible;
+  }
+
+  private positionHandles(fromLocal: IPointData, toLocal: IPointData) {
+    const hw = (this.fromHandle.width ?? this._handleSize) / 2;
+    const hh = (this.fromHandle.height ?? this._handleSize) / 2;
+    this.fromHandle.set({ x: fromLocal.x - hw, y: fromLocal.y - hh });
+    this.toHandle.set({ x: toLocal.x - hw, y: toLocal.y - hh });
+  }
+
+  private renderPointModeBetween(fromW: IPointData, toW: IPointData, setKey: boolean) {
+    const fw = fromW;
+    const tw = toW;
+    const key = `P|${fw.x.toFixed(1)},${fw.y.toFixed(1)}|${tw.x.toFixed(1)},${tw.y.toFixed(1)}|${this.options.routeType}|${this.options.padding}|${this.options.cornerRadius}|${this.options.scaleMode}`;
+    if (setKey) {
+      if (this._lastKey === key) {
+        if (this._label && this._labelMid) this._label.set({ x: this._labelMid.x, y: this._labelMid.y });
+        if (this._editingPoints) {
+          this.positionHandles(this.getLocalPoint(fw), this.getLocalPoint(tw));
+        }
+        return;
+      }
+      this._lastKey = key;
+    }
+
+    const routeType: ConnectorRouteType = this.options.routeType;
+    const fromL = this.getLocalPoint(fw);
+    const toL = this.getLocalPoint(tw);
+
+    const fromSide = inferSideByVector(toL.x - fromL.x, toL.y - fromL.y);
+    const toSide = inferSideByVector(fromL.x - toL.x, fromL.y - toL.y);
+    const pad = this.options.padding ?? 0;
+    const sPadL = {
+      x: fromL.x + sideOutDir(fromSide).x * pad,
+      y: fromL.y + sideOutDir(fromSide).y * pad,
+    };
+    const ePadL = {
+      x: toL.x + sideOutDir(toSide).x * pad,
+      y: toL.y + sideOutDir(toSide).y * pad,
+    };
+
+    const s: ConnectorPoint = {
+      node: undefined,
+      side: fromSide,
+      percent: 0.5,
+      margin: 0,
+      padding: pad,
+      linkPoint: fw,
+      paddingPoint: this.getWorldPoint(sPadL),
+    };
+    const e: ConnectorPoint = {
+      node: undefined,
+      side: toSide,
+      percent: 0.5,
+      margin: 0,
+      padding: pad,
+      linkPoint: tw,
+      paddingPoint: this.getWorldPoint(ePadL),
+    };
+
+    let pointsLocal: IPointData[];
+    let pathLocal: string;
+    let labelMid: IPointData;
+
+    if (routeType === "bezier") {
+      const { c1, c2 } = getCubicBezierControls(
+        sPadL,
+        ePadL,
+        fromSide,
+        toSide,
+        this.options.bezierCurvature
+      );
+      pathLocal = `M ${fromL.x} ${fromL.y} L ${sPadL.x} ${sPadL.y} C ${c1.x} ${c1.y} ${c2.x} ${c2.y} ${ePadL.x} ${ePadL.y} L ${toL.x} ${toL.y}`;
+      labelMid = cubicBezierPoint(sPadL, c1, c2, ePadL, 0.5);
+      pointsLocal = [fromL, sPadL, ePadL, toL];
+    } else if (routeType === "straight" || routeType === "custom") {
+      pointsLocal = dedupePoints([fromL, sPadL, ePadL, toL]);
+      pathLocal = buildRoundedPolylinePath(pointsLocal, this.options.cornerRadius);
+      labelMid = polylineMidpoint(pointsLocal);
+    } else {
+      const mid = buildOrthogonalBetween(sPadL, ePadL, [], {
+        radius: this.options.cornerRadius,
+        intersectionPenalty: this.options.routeOptions?.intersectionPenalty,
+        longStraightRatio: this.options.routeOptions?.longStraightRatio,
+        longStraightWeight: this.options.routeOptions?.longStraightWeight,
+        enableSRoutes: this.options.routeOptions?.enableSRoutes,
+      });
+      pointsLocal = dedupePoints([fromL, ...mid.points, toL]);
+      pathLocal = buildRoundedPolylinePath(pointsLocal, this.options.cornerRadius);
+      labelMid = polylineMidpoint(pointsLocal);
+    }
+
+    // onDraw override (world)
+    const defaultWorldPoints = pointsLocal.map((p) => this.getWorldPoint(p));
+    const defaultWorldPath = transformSvgPath(pathLocal, (p) => this.getWorldPoint(p));
+    const defaultResult = { points: defaultWorldPoints, path: defaultWorldPath };
+    if (this.options.onDraw) {
+      const override = this.options.onDraw({ s, e, defaultResult });
+      if (override?.path && typeof override.path === "string") {
+        pathLocal = transformSvgPath(override.path, (p) => this.getLocalPoint(p));
+      }
+      if (override?.points?.length) {
+        const ptsLocal = dedupePoints(override.points.map((p) => this.getLocalPoint(p)));
+        pointsLocal = ptsLocal;
+        pathLocal = buildRoundedPolylinePath(ptsLocal, this.options.cornerRadius);
+        labelMid = polylineMidpoint(ptsLocal);
+      }
+    }
+
+    this.wire.path = pathLocal;
+    this._labelMid = labelMid;
+    if (this._label) this._label.set({ x: labelMid.x, y: labelMid.y });
+    if (this._editingPoints) this.positionHandles(fromL, toL);
+    this.applyScaleMode();
+  }
+
   /**
    * 删除 label 节点（当用户清空文本时）
    * - 会同步清理 this.options.label，确保 getState/onChange 结果一致
@@ -255,9 +392,17 @@ export class Connector extends Group {
   constructor(app: App, options: ConnectorOptions) {
     super({});
     this._app = app;
-
-    this.fromNode = options.from;
-    this.toNode = options.to;
+    // mode detect
+    const hasPoints = "fromPoint" in options && "toPoint" in options;
+    this._mode = hasPoints ? "point" : "node";
+    if (this._mode === "node") {
+      // union narrowing ensures from/to exist
+      this.fromNode = (options as any).from;
+      this.toNode = (options as any).to;
+    } else {
+      this.fromPointWorld = (options as any).fromPoint;
+      this.toPointWorld = (options as any).toPoint;
+    }
 
     // 这里先把关键默认值算出来，避免 routeOptions 默认值依赖 margin/padding 时出现顺序问题
     const padding = options.padding ?? 20;
@@ -286,7 +431,8 @@ export class Connector extends Group {
       scaleMode: options.scaleMode || "world",
       arrowBaseScale: options.arrowBaseScale ?? 1,
       labelOnDoubleClick: options.labelOnDoubleClick ?? true,
-      updateMode: options.updateMode ?? "event",
+      // point 模式默认不监听外部变化：manual 更符合“只传点就画线”的预期
+      updateMode: options.updateMode ?? (this._mode === "point" ? "manual" : "event"),
       renderThrottleMs: options.renderThrottleMs ?? 16,
       ...options,
       // 深合并 routeOptions：即使用户只传一部分字段，也能带上默认值
@@ -302,7 +448,27 @@ export class Connector extends Group {
       hitStrokeWidth: 12,
     });
 
-    this.addMany(this.wire);
+    // point-mode handles (hidden by default, shown on click)
+    // NOTE: supports legacy `handles` (untyped) and new typed `pointHandles`
+    const handles = options.pointHandles || (options as any).handles || {};
+    const handleSize = handles.size ?? 10;
+    this._handleSize = handleSize;
+    const handleStyle = {
+      width: handleSize,
+      height: handleSize,
+      cornerRadius: handleSize,
+      fill: handles.fill ?? "#ffffff",
+      stroke: handles.stroke ?? "#000000",
+      strokeWidth: handles.strokeWidth ?? 1,
+      opacity: handles.opacity ?? 1,
+      draggable: true,
+      hitStrokeWidth: handles.hitStrokeWidth ?? 12,
+      visible: false,
+    };
+    this.fromHandle = new Rect({ ...handleStyle });
+    this.toHandle = new Rect({ ...handleStyle });
+
+    this.addMany(this.wire, this.fromHandle, this.toHandle);
 
     // 如果用户一开始就传了 label.text，则立即创建显示；如果 text 为空/空白，则不创建（避免出现空 label 节点）
     if (
@@ -315,6 +481,7 @@ export class Connector extends Group {
     this.update();
 
     // 协同/程序更新场景（可选）
+    // point 模式默认不监听 render（除非用户显式指定）
     if (this.options.updateMode === "render") {
       this._app.tree?.on_?.(RenderEvent.END, () =>
         this.requestUpdate("render")
@@ -323,9 +490,38 @@ export class Connector extends Group {
   }
 
   bind(from: IUI, to: IUI) {
+    this._mode = "node";
     this.fromNode = from;
     this.toNode = to;
+    this.fromPointWorld = null;
+    this.toPointWorld = null;
     this.invalidate();
+  }
+
+  bindPoints(from: IPointData, to: IPointData) {
+    this._mode = "point";
+    this.fromPointWorld = from;
+    this.toPointWorld = to;
+    this.fromNode = null;
+    this.toNode = null;
+    this.invalidate();
+  }
+
+  isPointMode() {
+    return this._mode === "point";
+  }
+
+  getPoints(): { from: IPointData; to: IPointData } | null {
+    if (this._mode !== "point" || !this.fromPointWorld || !this.toPointWorld)
+      return null;
+    return { from: this.fromPointWorld, to: this.toPointWorld };
+  }
+
+  setPoints(from: IPointData, to: IPointData) {
+    this.bindPoints(from, to);
+    this.options.onPointsChange?.({ from, to });
+    this.emitChange("points");
+    this.requestUpdate("event");
   }
 
   invalidate() {
@@ -358,14 +554,40 @@ export class Connector extends Group {
   }
 
   getState(): ConnectorState {
-    const fromId = this.fromNode.id ?? this.fromNode.innerId;
-    const toId = this.toNode.id ?? this.toNode.innerId;
+    const base = {
+      routeType: this.options.routeType,
+      padding: this.options.padding,
+      margin: this.options.margin,
+      cornerRadius: this.options.cornerRadius,
+      bezierCurvature: this.options.bezierCurvature,
+      opt1: this.options.opt1,
+      opt2: this.options.opt2,
+      stroke: this.options.stroke,
+      strokeWidth: this.options.strokeWidth,
+      dashPattern: this.options.dashPattern,
+      startArrow: this.options.startArrow,
+      endArrow: this.options.endArrow,
+      scaleMode: this.options.scaleMode,
+      arrowBaseScale: this.options.arrowBaseScale,
+      label: this.options.label,
+    } satisfies Omit<ConnectorState, "mode" | "fromId" | "toId" | "fromPoint" | "toPoint"> as any;
 
-    if (!fromId || !toId) {
-      throw new Error("Connector.getState: missing fromId/toId");
+    if (this._mode === "point") {
+      if (!this.fromPointWorld || !this.toPointWorld)
+        throw new Error("Connector.getState(point): missing fromPoint/toPoint");
+      return {
+        mode: "point",
+        fromPoint: this.fromPointWorld,
+        toPoint: this.toPointWorld,
+        ...base,
+      };
     }
 
+    const fromId = this.fromNode?.id ?? this.fromNode?.innerId;
+    const toId = this.toNode?.id ?? this.toNode?.innerId;
+    if (!fromId || !toId) throw new Error("Connector.getState: missing fromId/toId");
     return {
+      mode: "node",
       fromId,
       toId,
       routeType: this.options.routeType,
@@ -390,8 +612,11 @@ export class Connector extends Group {
     const diff: Partial<ConnectorState> = {};
     const changedKeys: (keyof ConnectorState)[] = [];
     const keys: (keyof ConnectorState)[] = [
+      "mode",
       "fromId",
       "toId",
+      "fromPoint",
+      "toPoint",
       "routeType",
       "padding",
       "margin",
@@ -423,7 +648,7 @@ export class Connector extends Group {
     return { diff, changedKeys };
   }
 
-  private emitChange(reason: "label" | "setState") {
+  private emitChange(reason: "label" | "setState" | "points") {
     if (!this.options.onChange) return;
     try {
       const next = this.getState();
@@ -444,13 +669,17 @@ export class Connector extends Group {
     state: ConnectorState,
     resolveNode: (id: string | number) => IUI | undefined
   ) {
-    const from = resolveNode(state.fromId);
-    const to = resolveNode(state.toId);
-    if (!from || !to)
-      throw new Error("Connector.setState: resolveNode failed for fromId/toId");
-
-    this.fromNode = from;
-    this.toNode = to;
+    if (state.mode === "point") {
+      if (!state.fromPoint || !state.toPoint)
+        throw new Error("Connector.setState(point): missing fromPoint/toPoint");
+      this.bindPoints(state.fromPoint, state.toPoint);
+    } else {
+      const from = resolveNode(state.fromId!);
+      const to = resolveNode(state.toId!);
+      if (!from || !to)
+        throw new Error("Connector.setState: resolveNode failed for fromId/toId");
+      this.bind(from, to);
+    }
 
     this.options.routeType = state.routeType;
     this.options.padding = state.padding;
@@ -769,8 +998,51 @@ export class Connector extends Group {
       // manual 模式：默认不自动更新（除非用户 invalidate / update 触发）
       // 这里不强制 return，因为用户可能手动调用 update() 进行刷新
     }
+
+    // 1) 拖拽优先（point-mode handles）
+    if (this._dragFromWorld || this._dragToWorld) {
+      const fromW =
+        this._dragFromWorld ??
+        (this._mode === "point"
+          ? this.fromPointWorld
+          : this.fromNode
+          ? centerOfBounds(this.fromNode.worldBoxBounds)
+          : null);
+      const toW =
+        this._dragToWorld ??
+        (this._mode === "point"
+          ? this.toPointWorld
+          : this.toNode
+          ? centerOfBounds(this.toNode.worldBoxBounds)
+          : null);
+      if (!fromW || !toW) return;
+
+      // point-mode: keep routeType during drag preview
+      if (this._mode === "point") {
+        this.renderPointModeBetween(fromW, toW, false);
+        return;
+      }
+
+      // node-mode drag preview (fallback to straight)
+      const fromL = this.getLocalPoint(fromW);
+      const toL = this.getLocalPoint(toW);
+      this.wire.path = `M ${fromL.x} ${fromL.y} L ${toL.x} ${toL.y}`;
+      this._labelMid = { x: (fromL.x + toL.x) / 2, y: (fromL.y + toL.y) / 2 };
+      if (this._label) this._label.set({ x: this._labelMid.x, y: this._labelMid.y });
+      this.applyScaleMode();
+      return;
+    }
+
+    // 2) point-mode：基于两个点计算连线（无节点，无需监听）
+    if (this._mode === "point") {
+      if (!this.fromPointWorld || !this.toPointWorld) return;
+      this.renderPointModeBetween(this.fromPointWorld, this.toPointWorld, true);
+      return;
+    }
+
     // 去重 key：基于两端 bounds + 配置（粗略即可）
     // 协同场景下，频繁 END 帧/坐标同步会调用 update()，key 去重能大幅减少重算/重绘
+    if (!this.fromNode || !this.toNode) return;
     const fb = this.fromNode.worldBoxBounds;
     const tb = this.toNode.worldBoxBounds;
     const key = `${fb.x.toFixed(1)},${fb.y.toFixed(1)},${fb.width.toFixed(
@@ -1027,9 +1299,79 @@ export class Connector extends Group {
       node.on_(DragEvent.DRAG, () => this.requestUpdate("event"));
       node.on_(DragEvent.END, () => this.requestUpdate("event"));
     };
-    if (this.options.updateMode !== "manual") {
-      bindNode(this.fromNode);
-      bindNode(this.toNode);
+    if (this._mode === "node" && this.options.updateMode !== "manual") {
+      if (this.fromNode) bindNode(this.fromNode);
+      if (this.toNode) bindNode(this.toNode);
+    }
+
+    // point-mode：点击进入编辑态，显示可拖拽端点
+    const pointsEditable = this.options.pointsEditable !== false;
+    if (this._mode === "point" && pointsEditable) {
+      const enterEdit = () => {
+        if (!this.fromPointWorld || !this.toPointWorld) return;
+        this._editingPoints = true;
+        this.setHandlesVisible(true);
+        this.positionHandles(
+          this.getLocalPoint(this.fromPointWorld),
+          this.getLocalPoint(this.toPointWorld)
+        );
+      };
+      this.wire.on_(PointerEvent.CLICK, enterEdit);
+      // touch
+      this.wire.on_(PointerEvent.TAP as any, enterEdit);
+
+      const leaveEditIfOutside = (e: any) => {
+        if (!this._editingPoints) return;
+        const t = e?.target;
+        if (t === this.wire || t === this.fromHandle || t === this.toHandle || t === this._label)
+          return;
+        this._editingPoints = false;
+        this.setHandlesVisible(false);
+      };
+      this._app.tree?.on_?.(PointerEvent.DOWN as any, leaveEditIfOutside);
+
+      const onHandleDrag = (which: "from" | "to") => {
+        const handle = which === "from" ? this.fromHandle : this.toHandle;
+        handle.on_(DragEvent.DRAG, () => {
+          if (!this._editingPoints) return;
+          const hx = handle.x ?? 0;
+          const hy = handle.y ?? 0;
+          const hw = handle.width ?? this._handleSize;
+          const hh = handle.height ?? this._handleSize;
+          const pLocal = { x: hx + hw / 2, y: hy + hh / 2 };
+          const pWorld = this.getWorldPoint(pLocal);
+          if (which === "from") this._dragFromWorld = pWorld;
+          else this._dragToWorld = pWorld;
+          this.requestUpdate("event");
+        });
+
+        handle.on_(DragEvent.END, () => {
+          if (!this._editingPoints) return;
+          const hx = handle.x ?? 0;
+          const hy = handle.y ?? 0;
+          const hw = handle.width ?? this._handleSize;
+          const hh = handle.height ?? this._handleSize;
+          const pLocal = { x: hx + hw / 2, y: hy + hh / 2 };
+          const pWorld = this.getWorldPoint(pLocal);
+
+          if (which === "from") {
+            this.fromPointWorld = pWorld;
+            this._dragFromWorld = null;
+          } else {
+            this.toPointWorld = pWorld;
+            this._dragToWorld = null;
+          }
+
+          if (this.fromPointWorld && this.toPointWorld) {
+            this.options.onPointsChange?.({ from: this.fromPointWorld, to: this.toPointWorld });
+            this.emitChange("points");
+          }
+          this.invalidate();
+        });
+      };
+
+      onHandleDrag("from");
+      onHandleDrag("to");
     }
   }
 }

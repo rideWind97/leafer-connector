@@ -13,7 +13,10 @@ export type ConnectorAnchorSpec =
   | { type: "nearest-edge" };
 
 export interface ConnectorPoint {
-  node: IUI;
+  /**
+   * node 模式下存在；point 模式下为 undefined
+   */
+  node?: IUI;
   side: ConnectorSide;
   percent: number;
   margin: number;
@@ -63,9 +66,42 @@ export type ConnectorDrawResult = {
   path: string;
 };
 
-export interface ConnectorOptions {
-  from: IUI;
-  to: IUI;
+export interface ConnectorPointHandleStyle {
+  /**
+   * handle 尺寸（直径）
+   */
+  size?: number; // default 10
+  fill?: string; // default "#ffffff"
+  stroke?: string; // default "#000000"
+  strokeWidth?: number; // default 1
+  opacity?: number; // default 1
+  /**
+   * 命中范围（越大越好点）
+   */
+  hitStrokeWidth?: number; // default 12
+}
+
+type ConnectorEndpoints =
+  | {
+      /**
+       * node 模式：传入两个节点（原有用法）
+       */
+      from: IUI;
+      to: IUI;
+      fromPoint?: never;
+      toPoint?: never;
+    }
+  | {
+      /**
+       * point 模式：传入两个点（world 坐标）
+       */
+      from?: never;
+      to?: never;
+      fromPoint: IPointData;
+      toPoint: IPointData;
+    };
+
+export type ConnectorOptions = ConnectorEndpoints & {
 
   /**
    * 全局：从边界外扩的距离（出线段长度）
@@ -169,12 +205,28 @@ export interface ConnectorOptions {
    * - 依赖 getNodeId，缺失时将无法生成 state（会跳过回调）
    */
   onChange?: (param: {
-    reason: "label" | "setState";
+    reason: "label" | "setState" | "points";
     prev: ConnectorState;
     next: ConnectorState;
     diff: Partial<ConnectorState>;
     changedKeys: (keyof ConnectorState)[];
   }) => void;
+
+  /**
+   * point 模式：端点坐标变化回调（拖拽 handle / setPoints）
+   */
+  onPointsChange?: (param: { from: IPointData; to: IPointData }) => void;
+
+  /**
+   * point 模式：是否允许点击进入编辑态（显示端点 handle 并可拖拽）
+   * - 默认 true（仅在 point 模式下生效）
+   */
+  pointsEditable?: boolean;
+
+  /**
+   * point 模式：端点圆点（handles）样式
+   */
+  pointHandles?: ConnectorPointHandleStyle;
 
   stroke?: string;
   strokeWidth?: number;
@@ -192,11 +244,25 @@ export interface ConnectorOptions {
     style?: Partial<ITextInputData>;
   };
   labelOnDoubleClick?: boolean;
-}
+};
 
 export interface ConnectorState {
-  fromId: string | number;
-  toId: string | number;
+  /**
+   * node/point 两种模式
+   */
+  mode: "node" | "point";
+
+  /**
+   * node 模式：节点 id
+   */
+  fromId?: string | number;
+  toId?: string | number;
+
+  /**
+   * point 模式：端点坐标（world）
+   */
+  fromPoint?: IPointData;
+  toPoint?: IPointData;
   routeType: ConnectorRouteType;
   padding: number;
   margin: number;

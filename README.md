@@ -50,6 +50,40 @@ const edge = new Connector(app, { from: a, to: b });
 app.tree.add([a, b, edge]);
 ```
 
+## 纯坐标连线（Point 模式）
+
+如果你不想传节点（`IUI`），只想用 **两个点坐标** 画一条连线，可以用 point 模式：
+
+- 只传点时，Connector **不会监听节点拖拽/渲染事件**（默认 `updateMode="manual"`）
+- **点击连线**会显示起点/终点两个圆点（handle），拖动圆点会更新端点坐标
+
+Point 模式新增参数：
+
+- **`fromPoint` / `toPoint`**：`IPointData`（world 坐标），与 `from/to` 二选一
+- **`pointsEditable`**：`boolean`，是否允许点击进入编辑态（显示/拖拽端点圆点），默认 `true`
+- **`pointHandles`**：端点圆点样式（见下表）
+- **`onPointsChange`**：端点坐标变化回调（拖拽端点 / `setPoints` 时触发）
+
+```ts
+import { App } from "leafer-editor";
+import { Connector } from "leafer-connector";
+
+const app = new App({ view: container, editor: {} });
+
+const edge = new Connector(app, {
+  fromPoint: { x: 120, y: 160 },
+  toPoint: { x: 520, y: 320 },
+  routeType: "bezier",
+  pointsEditable: true, // 默认 true（仅 point 模式生效）
+  onPointsChange: ({ from, to }) => {
+    console.log("points changed:", from, to);
+  },
+});
+
+app.tree.add(edge);
+edge.update(); // point 模式下你也可以手动触发刷新
+```
+
 ## 路由示例
 
 ### 正交（orthogonal）
@@ -159,6 +193,8 @@ const edge = new Connector(app, {
 | --- | --- | --- | --- | --- |
 | `from` | `IUI` | 是 | - | 起点节点 |
 | `to` | `IUI` | 是 | - | 终点节点 |
+| `fromPoint` | `IPointData` | 否 | - | **Point 模式**起点坐标（world）；与 `from/to` 互斥 |
+| `toPoint` | `IPointData` | 否 | - | **Point 模式**终点坐标（world）；与 `from/to` 互斥 |
 | `routeType` | `"orthogonal" \| "bezier" \| "straight" \| "custom"` | 否 | `"orthogonal"` | 路由类型 |
 | `padding` | `number` | 否 | `20` | 出线段长度（从 linkPoint 沿法线外扩） |
 | `margin` | `number` | 否 | `0` | 连接点与节点边界间距（让线不贴边） |
@@ -177,7 +213,8 @@ const edge = new Connector(app, {
 | `updateMode` | `"event" \| "render" \| "manual"` | 否 | `"event"` | 自动更新模式（协同场景建议用 render） |
 | `renderThrottleMs` | `number` | 否 | `16` | render 模式节流（ms） |
 | `getNodeId` | `(node: IUI) => string` | 否 | - | 协同序列化：node -> id（用于 getState/onChange） |
-| `onChange` | `({ reason, prev, next, diff, changedKeys }) => void` | 否 | - | 统一变更回调（reason: `"label" \| "setState"`） |
+| `onChange` | `({ reason, prev, next, diff, changedKeys }) => void` | 否 | - | 统一变更回调（reason: `"label" \| "setState" \| "points"`） |
+| `onPointsChange` | `({ from, to }) => void` | 否 | - | **Point 模式**端点坐标变化回调 |
 | `onLabelChange` | `({ oldText, newText }) => void` | 否 | - | label 文本变化回调 |
 | `stroke` | `string` | 否 | `"#ffffff"` | 线条颜色 |
 | `strokeWidth` | `number` | 否 | `2` | 线宽 |
@@ -191,6 +228,14 @@ const edge = new Connector(app, {
 | `label.editable` | `boolean` | 否 | - | 是否允许编辑（打开 inner editor） |
 | `label.style` | `Partial<ITextInputData>` | 否 | - | 文案样式（fill/fontSize/boxStyle/padding 等） |
 | `labelOnDoubleClick` | `boolean` | 否 | `true` | 是否允许双击连线打开/创建 label |
+| `pointsEditable` | `boolean` | 否 | `true` | **Point 模式**是否允许点击进入编辑态（显示/拖拽端点圆点） |
+| `pointHandles` | `{ ... }` | 否 | - | **Point 模式**端点圆点样式 |
+| `pointHandles.size` | `number` | 否 | `10` | 端点圆点直径 |
+| `pointHandles.fill` | `string` | 否 | `"#ffffff"` | 填充色 |
+| `pointHandles.stroke` | `string` | 否 | `"#000000"` | 描边色 |
+| `pointHandles.strokeWidth` | `number` | 否 | `1` | 描边宽度 |
+| `pointHandles.opacity` | `number` | 否 | `1` | 透明度 |
+| `pointHandles.hitStrokeWidth` | `number` | 否 | `12` | 命中范围（越大越好点） |
 
 ### `TargetOption`（用于 `opt1/opt2`）表格
 
@@ -373,6 +418,19 @@ const edge = new Connector(app, {
 
 - ESM：`dist/esm`
 - CJS：`dist/cjs`（`.cjs` 后缀）
+
+## Vue 3 + Vite Playground（本仓库内运行示例）
+
+本仓库内置了一个 Vue 3 的 Vite 示例项目（用于本地调试/演示）：
+
+```bash
+pnpm install
+pnpm run dev
+```
+
+- 默认会启动在 `http://localhost:5173`
+- playground 代码在 `playground-vue/`
+- 开发时会通过 Vite alias 直接引用本仓库源码：`leafer-connector → ../src/index.ts`
 
 可选：Rollup 生产 bundle（更适合做体积检查/发布前 smoke test）：
 
