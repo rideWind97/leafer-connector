@@ -83,6 +83,8 @@ const edge = new Connector(app, {
 app.tree.add(edge);
 edge.update(); // point 模式下你也可以手动触发刷新
 ```
+![Preview](https://github.com/rideWind97/leafer-connector/blob/master/playground/assets/point-mode.gif)
+
 
 ### 模式切换（Point → Node）
 
