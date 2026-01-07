@@ -84,6 +84,32 @@ app.tree.add(edge);
 edge.update(); // point 模式下你也可以手动触发刷新
 ```
 
+### 模式切换（Point → Node）
+
+Connector 支持在运行时从 **Point 模式切回 Node 模式**（比如你先用点画线，后续拿到真实节点再绑定）：
+
+- **会自动清理 point-mode 的编辑态/拖拽态**（隐藏 handles）
+- **会解绑旧的交互监听并重新绑定**，避免残留 point-mode 的 click/drag 行为
+- 默认会把 `updateMode` 切回 `"event"`（因为 point-mode 默认 `updateMode="manual"`）
+
+API：
+
+```ts
+// 从 point-mode 切换到 node-mode
+edge.switchToNodeMode(a, b);
+
+// 或者显式指定 updateMode（例如协同场景）
+edge.switchToNodeMode(a, b, { updateMode: "render" });
+```
+
+参数说明：
+
+- **`from`**：`IUI`，起点节点
+- **`to`**：`IUI`，终点节点
+- **`opts`**（可选）：
+  - **`opts.autoUpdateMode`**：`boolean`，默认 `true`。为 `true` 时（且未传 `opts.updateMode`），会将 `updateMode` 设为 `"event"`
+  - **`opts.updateMode`**：`"event" | "render" | "manual"`，强制设置切换后的更新模式
+
 ## 路由示例
 
 ### 正交（orthogonal）
@@ -411,6 +437,12 @@ const edge = new Connector(app, {
 ## API 导出
 
 - 导出：`Connector` 以及相关类型（见 `src/types.ts`）
+
+### Connector 实例方法（补充）
+
+| 方法 | 说明 |
+| --- | --- |
+| `switchToNodeMode(from, to, opts?)` | 从 point-mode 切换到 node-mode，并重新绑定交互监听（详见上方“模式切换”小节） |
 
 ## 构建与发布
 

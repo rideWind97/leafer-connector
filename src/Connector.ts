@@ -88,7 +88,8 @@ export class Connector extends Group {
   private _pendingUpdate = false;
   private _lastRenderUpdateAt = 0;
 
-  private _boundNodes = new WeakSet<IUI>();
+  private _boundNodes = new Map<IUI, { onDrag: () => void; onEnd: () => void }>();
+  private _unbindInteractions?: () => void;
 
   private setHandlesVisible(visible: boolean) {
     this.fromHandle.visible = visible;
@@ -521,7 +522,8 @@ export class Connector extends Group {
   }
 
   private bindInteractions() {
-    bindConnectorInteractions({
+    this._unbindInteractions?.();
+    this._unbindInteractions = bindConnectorInteractions({
       app: this._app,
       mode: this._mode,
       updateMode: this.options.updateMode,
@@ -560,5 +562,48 @@ export class Connector extends Group {
       requestUpdate: (r) => this.requestUpdate(r),
       invalidate: () => this.invalidate(),
     });
+  }
+
+  /**
+   * 将 Connector 从 point-mode 切换到 node-mode（运行时切换）。
+   * - 会清理 point-mode 的编辑态/拖拽态
+   * - 会解绑旧交互监听并按 node-mode 重新绑定（避免残留 point-mode click/drag 行为）
+   */
+  switchToNodeMode(
+    from: IUI,
+    to: IUI,
+    opts?: {
+      /**
+       * 切换后是否自动将 updateMode 设为 "event"
+       * - 默认 true：因为 point-mode 默认 updateMode="manual"，切回 node-mode 通常期望跟随节点拖动自动更新
+       */
+      autoUpdateMode?: boolean;
+      /**
+       * 强制设置 updateMode
+       */
+      updateMode?: "event" | "render" | "manual";
+    }
+  ) {
+    this._mode = "node";
+    this.fromNode = from;
+    this.toNode = to;
+    this.fromPointWorld = null;
+    this.toPointWorld = null;
+
+    // reset point edit state
+    this._editingPoints = false;
+    this._dragFromWorld = null;
+    this._dragToWorld = null;
+    this.setHandlesVisible(false);
+
+    if (opts?.updateMode) {
+      this.options.updateMode = opts.updateMode;
+    } else if (opts?.autoUpdateMode !== false) {
+      this.options.updateMode = "event";
+    }
+
+    this.invalidate();
+    this.bindInteractions();
+    this.requestUpdate("event");
   }
 }

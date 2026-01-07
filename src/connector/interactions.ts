@@ -14,7 +14,7 @@ export function bindConnectorInteractions(params: {
   getLabelNode: () => any;
   openOrCreateLabelEditor: () => void;
 
-  boundNodes: WeakSet<IUI>;
+  boundNodes: Map<IUI, { onDrag: () => void; onEnd: () => void }>;
   fromNode: IUI | null;
   toNode: IUI | null;
 
@@ -33,20 +33,31 @@ export function bindConnectorInteractions(params: {
   onPointsCommit: () => void;
   requestUpdate: (reason?: "render" | "invalidate" | "event") => void;
   invalidate: () => void;
-}) {
+}): () => void {
+  const unsubs: Array<() => void> = [];
+  const on = (target: any, type: any, handler: any) => {
+    target?.on_?.(type, handler);
+    unsubs.push(() => target?.off_?.(type, handler));
+  };
+
+  const boundThisTime: IUI[] = [];
+
   // 双击连线：创建/编辑 label
   if (params.labelOnDoubleClick) {
     const onDbl = () => params.openOrCreateLabelEditor();
-    params.wire.on_(PointerEvent.DOUBLE_CLICK, onDbl);
-    params.wire.on_(PointerEvent.DOUBLE_TAP, onDbl);
+    on(params.wire, PointerEvent.DOUBLE_CLICK, onDbl);
+    on(params.wire, PointerEvent.DOUBLE_TAP, onDbl);
   }
 
   // node-mode：监听节点拖动
   const bindNode = (node: IUI) => {
     if (params.boundNodes.has(node)) return;
-    params.boundNodes.add(node);
-    node.on_(DragEvent.DRAG, () => params.requestUpdate("event"));
-    node.on_(DragEvent.END, () => params.requestUpdate("event"));
+    const onDrag = () => params.requestUpdate("event");
+    const onEnd = () => params.requestUpdate("event");
+    params.boundNodes.set(node, { onDrag, onEnd });
+    boundThisTime.push(node);
+    on(node, DragEvent.DRAG, onDrag);
+    on(node, DragEvent.END, onEnd);
   };
   if (params.mode === "node" && params.updateMode !== "manual") {
     if (params.fromNode) bindNode(params.fromNode);
@@ -62,8 +73,8 @@ export function bindConnectorInteractions(params: {
       params.setHandlesVisible(true);
       params.positionHandles(params.getLocalPoint(pts.from), params.getLocalPoint(pts.to));
     };
-    params.wire.on_(PointerEvent.CLICK, enterEdit);
-    params.wire.on_(PointerEvent.TAP as any, enterEdit);
+    on(params.wire, PointerEvent.CLICK, enterEdit);
+    on(params.wire, PointerEvent.TAP as any, enterEdit);
 
     const leaveEditIfOutside = (e: any) => {
       if (!params.getEditingPoints()) return;
@@ -72,11 +83,11 @@ export function bindConnectorInteractions(params: {
       params.setEditingPoints(false);
       params.setHandlesVisible(false);
     };
-    params.app.tree?.on_?.(PointerEvent.DOWN as any, leaveEditIfOutside);
+    on(params.app.tree, PointerEvent.DOWN as any, leaveEditIfOutside);
 
     const onHandleDrag = (which: "from" | "to") => {
       const handle = which === "from" ? params.fromHandle : params.toHandle;
-      handle.on_(DragEvent.DRAG, () => {
+      const onDrag = () => {
         if (!params.getEditingPoints()) return;
         const hx = handle.x ?? 0;
         const hy = handle.y ?? 0;
@@ -86,9 +97,9 @@ export function bindConnectorInteractions(params: {
         const pWorld = params.getWorldPoint(pLocal);
         params.setDragWorld(which, pWorld);
         params.requestUpdate("event");
-      });
+      };
 
-      handle.on_(DragEvent.END, () => {
+      const onEnd = () => {
         if (!params.getEditingPoints()) return;
         const hx = handle.x ?? 0;
         const hy = handle.y ?? 0;
@@ -100,12 +111,22 @@ export function bindConnectorInteractions(params: {
         params.setDragWorld(which, null);
         params.onPointsCommit();
         params.invalidate();
-      });
+      };
+
+      on(handle, DragEvent.DRAG, onDrag);
+      on(handle, DragEvent.END, onEnd);
     };
 
     onHandleDrag("from");
     onHandleDrag("to");
   }
+
+  return () => {
+    // unbind event handlers
+    for (const u of unsubs.splice(0)) u();
+    // remove node bindings from map so future rebinds work
+    for (const n of boundThisTime) params.boundNodes.delete(n);
+  };
 }
 
 
