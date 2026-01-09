@@ -24,7 +24,7 @@ let app: App | null = null;
 onMounted(() => {
   if (!container.value) return;
 
-  app = new App({ view: container.value, editor: {} as any });
+  app = new App({ view: container.value, editor: { circle: {} } as any });
 
   const a = new Rect({
     x: 120,
@@ -34,6 +34,14 @@ onMounted(() => {
     fill: "#32cd79",
     draggable: true,
     cornerRadius: 16,
+    editable: true,
+    selectable: true,
+    // leafer-editor 编辑器配置使用 rotateable/resizeable（不是 rotatable/resizable）
+    editConfig: {
+      // rotate 控制点显示条件：rotateable && resizeable
+      resizeable: true,
+      rotateable: true,
+    },
   });
 
   const b = new Rect({
@@ -44,6 +52,13 @@ onMounted(() => {
     fill: "#3b82f6",
     draggable: true,
     cornerRadius: 16,
+    editable: true,
+    selectable: true,
+    editConfig: {
+      // rotate 控制点显示条件：rotateable && resizeable
+      resizeable: true,
+      rotateable: true,
+    },
   });
 
   // node-mode
@@ -69,6 +84,8 @@ onMounted(() => {
 
   app.tree.add([a, b, edge1, edge2]);
   edge2.update(); // point-mode默认 manual，可手动触发一次
+  // 默认选中一个节点，方便直接看到编辑框/旋转手柄
+  (app as any).editor?.select?.(b);
 });
 
 onBeforeUnmount(() => {
@@ -77,5 +94,3 @@ onBeforeUnmount(() => {
   app = null;
 });
 </script>
-
-

@@ -1,4 +1,14 @@
-import { DragEvent, PointerEvent, type App, type IPointData, type IUI, type Path, type Rect } from "leafer-editor";
+import {
+  BoundsEvent,
+  DragEvent,
+  PointerEvent,
+  PropertyEvent,
+  type App,
+  type IPointData,
+  type IUI,
+  type Path,
+  type Rect,
+} from "leafer-editor";
 
 export function bindConnectorInteractions(params: {
   app: App;
@@ -54,10 +64,28 @@ export function bindConnectorInteractions(params: {
     if (params.boundNodes.has(node)) return;
     const onDrag = () => params.requestUpdate("event");
     const onEnd = () => params.requestUpdate("event");
+    // 用于捕捉：编辑器拉伸/缩放导致的“节点本地边界变化”（更语义化，避免监听所有属性）
+    const onLocalBounds = () => params.requestUpdate("event");
+
+    // 用于补全：纯位移/旋转/倾斜通常不一定触发 BoundsEvent.LOCAL，但会影响连线定位
+    const onAttrChange = (e: any) => {
+      const name = e?.attrName;
+      if (
+        name === "x" ||
+        name === "y" ||
+        name === "rotation" ||
+        name === "skewX" ||
+        name === "skewY"
+      ) {
+        params.requestUpdate("event");
+      }
+    };
     params.boundNodes.set(node, { onDrag, onEnd });
     boundThisTime.push(node);
     on(node, DragEvent.DRAG, onDrag);
     on(node, DragEvent.END, onEnd);
+    on(node, BoundsEvent.LOCAL, onLocalBounds);
+    on(node, PropertyEvent.CHANGE, onAttrChange);
   };
   if (params.mode === "node" && params.updateMode !== "manual") {
     if (params.fromNode) bindNode(params.fromNode);
