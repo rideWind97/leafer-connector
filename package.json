@@ -38,7 +38,7 @@
     }
   },
   "peerDependencies": {
-    "leafer-editor": "^1.12.1"
+    "leafer-editor": "^2.0.1"
   },
   "peerDependenciesMeta": {
     "leafer-editor": {

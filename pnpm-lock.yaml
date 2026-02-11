@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       leafer-editor:
-        specifier: ^1.12.1
+        specifier: ^2.0.1
         version: 2.0.1(@leafer-ui/interface@2.0.1)(@leafer/interface@2.0.1)
     devDependencies:
       '@rollup/plugin-commonjs':
