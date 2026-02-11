@@ -87,9 +87,21 @@ export class Connector extends Group {
 
   private _pendingUpdate = false;
   private _lastRenderUpdateAt = 0;
+  private _didInitialTreeSync = false;
 
   private _boundNodes = new Map<IUI, { onDrag: () => void; onEnd: () => void }>();
   private _unbindInteractions?: () => void;
+
+  /**
+   * Leafer 的 world matrix/bounds 具有惰性更新特性。
+   * 在缩放后的首轮 update 中，若直接 getLocalPoint 可能读到旧矩阵，导致首帧错位。
+   * 这里在关键计算前手动推进一次 world 矩阵同步，保证坐标换算稳定。
+   */
+  private syncWorldMatrices() {
+    (this as any).__updateWorldMatrix?.();
+    (this.fromNode as any)?.__updateWorldMatrix?.();
+    (this.toNode as any)?.__updateWorldMatrix?.();
+  }
 
   private setHandlesVisible(visible: boolean) {
     this.fromHandle.visible = visible;
@@ -243,6 +255,20 @@ export class Connector extends Group {
 
     this.bindInteractions();
     this.update();
+
+    // 首次挂载到 tree 后，等下一帧再刷新一次，确保缩放矩阵已稳定。
+    this.waitParent(() => {
+      this.nextRender(() => this.invalidate());
+    });
+
+    // 首次渲染进入 tree 后再强制重算一次：
+    // 构造阶段可能尚未被 add 到 tree，此时 getLocalPoint 仍按未挂载坐标系计算，
+    // 在画布已缩放场景会出现初次路径错位。等到首帧渲染后 invalidate 可统一修正。
+    this.on_?.(RenderEvent.END, () => {
+      if (this._didInitialTreeSync) return;
+      this._didInitialTreeSync = true;
+      this.invalidate();
+    });
 
     // 协同/程序更新场景（可选）
     // point 模式默认不监听 render（除非用户显式指定）
@@ -408,6 +434,8 @@ export class Connector extends Group {
   }
 
   update() {
+    this.syncWorldMatrices();
+
     if (this.options.updateMode === "manual" && this._lastKey != null) {
       // manual 模式：默认不自动更新（除非用户 invalidate / update 触发）
       // 这里不强制 return，因为用户可能手动调用 update() 进行刷新
